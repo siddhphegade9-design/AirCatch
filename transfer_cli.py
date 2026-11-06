@@ -1,0 +1,10 @@
+﻿"""Launcher for the transfer command-line tool (adds src/ to Python's path)."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from aircatch.transfer.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
