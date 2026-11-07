@@ -1,4 +1,7 @@
-﻿"""Launcher for the speed benchmark (adds src/ to Python's path)."""
+"""Launcher for the speed benchmark (adds src/ to Python's path).
+
+  python transfer_bench.py --size-mb 512
+"""
 import sys
 from pathlib import Path
 

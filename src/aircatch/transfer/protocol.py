@@ -38,7 +38,7 @@ async def read_message(reader: asyncio.StreamReader, timeout: float) -> dict:
         raise ProtocolError("connection closed") from exc
     except asyncio.TimeoutError as exc:
         raise ProtocolError("timed out waiting for the other device") from exc
-    except ConnectionError as exc:
+    except OSError as exc:   # connection reset, TLS errors, ...
         raise ProtocolError("connection lost") from exc
     try:
         message = json.loads(body.decode("utf-8"))

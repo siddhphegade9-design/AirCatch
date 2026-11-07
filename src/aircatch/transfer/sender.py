@@ -4,11 +4,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import ssl
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from aircatch.security import tls
+from aircatch.security.identity import DeviceIdentity, fingerprint_from_der
+from aircatch.security.trust import TrustedPeer
 from aircatch.transfer.events import EventCallback, EventKind, TransferEvent
 from aircatch.transfer.protocol import (CHUNK_SIZE, PROTOCOL_VERSION, STREAM_LIMIT,
                                         ProtocolError, read_message, send_message)
@@ -41,11 +45,19 @@ def _read_and_hash(handle, hasher, want: int) -> bytes:
 
 async def send_file(host: str, port: int, path: str | Path, *, sender_name: str,
                     on_event: EventCallback | None = None, connect_timeout: float = 10.0,
-                    accept_timeout: float = 60.0, idle_timeout: float = 30.0) -> SendResult:
+                    accept_timeout: float = 60.0, idle_timeout: float = 30.0,
+                    identity: DeviceIdentity | None = None,
+                    peer: TrustedPeer | None = None) -> SendResult:
     """Send one file. Expected failures are returned (ok=False), not raised.
+
+    Secure mode: pass both `identity` (this device) and `peer` (the paired receiver).
+    The connection is then TLS 1.3 and only the pinned receiver certificate is accepted.
+    With neither, the old unencrypted mode is used (testing only).
 
     Cancelling the task that runs this function aborts the transfer cleanly.
     """
+    if (identity is None) != (peer is None):
+        raise ValueError("identity and peer must be given together (secure mode)")
     path = Path(path)
     transfer_id = uuid.uuid4().hex
     filename = path.name
@@ -70,14 +82,26 @@ async def send_file(host: str, port: int, path: str | Path, *, sender_name: str,
     except OSError:
         return failure("file_not_found")
 
+    ssl_ctx = tls.build_client_context(identity, peer.cert_pem) if peer is not None else None
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, limit=STREAM_LIMIT), connect_timeout)
+            asyncio.open_connection(host, port, limit=STREAM_LIMIT, ssl=ssl_ctx,
+                                    server_hostname="aircatch" if ssl_ctx else None),
+            connect_timeout)
+    except ssl.SSLCertVerificationError:
+        return failure("untrusted_peer", size)
+    except ssl.SSLError:
+        return failure("tls_error", size)
     except (OSError, asyncio.TimeoutError):
         return failure("could_not_connect", size)
 
     receiver_name = ""
     try:
+        if peer is not None:   # belt and braces: exactly the certificate we paired with
+            ssl_object = writer.get_extra_info("ssl_object")
+            der = ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            if not der or fingerprint_from_der(der) != peer.device_id:
+                return failure("untrusted_peer", size)
         await send_message(writer, {"type": "offer", "version": PROTOCOL_VERSION,
                                     "transfer_id": transfer_id, "sender_name": sender_name,
                                     "filename": filename, "size": size})
@@ -126,6 +150,8 @@ async def send_file(host: str, port: int, path: str | Path, *, sender_name: str,
         return failure(str(result.get("reason", "failed"))[:50], size, receiver_name)
     except (ProtocolError, ConnectionError, asyncio.TimeoutError, OSError) as exc:
         reason = "timeout" if isinstance(exc, asyncio.TimeoutError) else "connection_lost"
+        if isinstance(exc, ssl.SSLError) or isinstance(exc.__cause__, ssl.SSLError):
+            reason = "tls_error"
         if isinstance(exc, ProtocolError) and "timed out" not in str(exc):
             reason = "connection_lost"
         return failure(reason, size, receiver_name)

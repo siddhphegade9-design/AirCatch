@@ -7,3 +7,5 @@ dist/
 .pytest_cache/
 
 received/
+
+devices/

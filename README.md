@@ -18,14 +18,21 @@ Gesture-controlled wireless file transfer. Milestone 1: app shell + webcam previ
 - `src/aircatch/ui`      QML interface + Python bridge
 - Later: `protocol/`, `transport/`, `pairing/`, `discovery/`, `transfer/`, `gestures/`
 
-## Milestone 2: transfer engine
-Benchmark (localhost, measures CPU/disk, not Wi-Fi):
+## Milestone 2 and 3: transfer engine + security
+Install packages (once): `pip install -r requirements.txt`
 
-    python -m aircatch.transfer.benchmark --size-mb 512
+Speed test (localhost, measures CPU/disk, not Wi-Fi):
 
-Real transfer between two terminals or two devices:
+    python transfer_bench.py --size-mb 512
+    python transfer_bench.py --size-mb 512 --secure
 
-    python -m aircatch.transfer.cli receive --dir received --port 5001
-    python -m aircatch.transfer.cli send --host 127.0.0.1 --port 5001 somefile.zip
+Two test devices on one PC (separate folders = separate identities):
 
-Protocol description: `docs/protocol.md`
+    python transfer_cli.py receive --config-dir devices\A --name Laptop-A --dir devices\A\inbox --pair
+    python transfer_cli.py pair-join --config-dir devices\B --name Phone-B "<pairing string>"
+    python transfer_cli.py send --config-dir devices\B --to Laptop-A --host 127.0.0.1 --port 5001 run.py
+
+Other commands: `identity`, `peers`, `unpair NAME`. Add `--insecure` to send/receive for the old unencrypted test mode.
+
+Docs: `docs/protocol.md` (rules of the conversation), `docs/security.md` (what is and is not protected).
+Never commit `devices/` or any `device.key` file.
