@@ -11,6 +11,7 @@
 | A pairing string being reused | Single use: it is invalid after the first successful pairing. |
 | A paired device lying about its name | The receiver shows the name stored at pairing time, never the name in the offer. |
 | Unpaired device still sending | Unpairing is immediate, even from another program, because the trusted list is re-read when it changes. |
+| A fake device advertising itself as yours | Discovery only suggests an address. The sender pins the exact certificate and refuses a different one (`untrusted_peer`). Advertisements are validated, only local addresses are accepted, and at most 100 are tracked. |
 | Flooding the receiver | Connection limit, TLS handshake timeout, transfer limits, per-pairing attempt limit. |
 | Tampered or corrupted files | SHA-256 check before anything is saved (unchanged from Milestone 2). |
 
@@ -20,7 +21,7 @@
 - **A paired device is trusted to send you files** (you still approve each one). Unpair devices you no longer use, on both sides.
 - **Unpair on both devices.** Unpairing on one side stops that side accepting files, and the other side's sends will be refused. The other device still lists you until you remove it there too.
 - **Certificates last 10 years** and there is no key rotation yet.
-- **IP address and port are visible** on the network (but not file names or contents).
+- **IP address, port, display name and a stable discovery hint are visible** on the network while the receiver runs and advertises (never file names or contents, and never the device ID). Use `--no-advertise` to hide.
 - A device that is already paired **and** compromised can do whatever a paired device can do.
 - This has not had an independent security audit. It uses standard components (TLS 1.3 from OpenSSL via Python, the `cryptography` library, HMAC-SHA256) and no home-made cryptography.
 

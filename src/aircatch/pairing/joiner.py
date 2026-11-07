@@ -24,7 +24,7 @@ class PairResult:
 
 
 async def pair_with(payload: PairingPayload, identity: DeviceIdentity, trust: TrustStore, *,
-                    connect_timeout: float = 10.0, approval_timeout: float = 120.0) -> PairResult:
+                    connect_timeout: float = 10.0, approval_timeout: float = 330.0) -> PairResult:
     """Pair with the device that produced `payload`. On success both sides trust each other."""
     ctx = build_client_context(identity=None, server_cert_pem=None)
     try:

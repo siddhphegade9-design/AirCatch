@@ -32,7 +32,13 @@ Two test devices on one PC (separate folders = separate identities):
     python transfer_cli.py pair-join --config-dir devices\B --name Phone-B "<pairing string>"
     python transfer_cli.py send --config-dir devices\B --to Laptop-A --host 127.0.0.1 --port 5001 run.py
 
+Automatic discovery (receiver announces itself; sender finds it):
+
+    python transfer_cli.py discover
+    python transfer_cli.py send --to Laptop-A run.py          (no --host needed)
+    python transfer_cli.py send --to Laptop-A --host 192.168.1.23 run.py   (manual fallback)
+
 Other commands: `identity`, `peers`, `unpair NAME`. Add `--insecure` to send/receive for the old unencrypted test mode.
 
-Docs: `docs/protocol.md` (rules of the conversation), `docs/security.md` (what is and is not protected).
+Docs: `docs/protocol.md`, `docs/security.md`, `docs/discovery.md`.
 Never commit `devices/` or any `device.key` file.

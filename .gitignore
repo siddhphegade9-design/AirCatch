@@ -9,3 +9,9 @@ dist/
 received/
 
 devices/
+
+received/
+
+devices/
+
+*.key

@@ -34,12 +34,16 @@ The host opens a **pairing window** (default 120 s, single use, 3 failed attempt
 3. Host checks the proof (constant time), asks its user to approve, then -> `{"type":"pair_accept","device_name":"..."}` **or** `{"type":"pair_reject","reason":"..."}`.
 4. Both sides store the other's certificate in their trusted-devices list.
 
+## Discovery
+Receivers announce `_aircatch._tcp.local.` over mDNS with TXT records `v=1`, `h=<16-hex hint>`, `n=<name>`.
+See `docs/discovery.md`. Discovery tells a sender where a paired device is; identity is still proven by the TLS certificate.
+
 ## Reason codes
 Receiver: `declined`, `too_large`, `disk_full`, `busy`, `duplicate`, `malformed`, `unsupported_version`, `not_paired`,
 `hash_mismatch`, `connection_lost`, `timeout`, `disk_error`, `protocol_error`.
 Pairing: `pairing_closed`, `bad_code`, `declined`, `busy`, `malformed`.
 Sender/joiner side only: `could_not_connect`, `file_not_found`, `file_unreadable`, `file_changed`,
-`tls_error`, `untrusted_peer`, `fingerprint_mismatch`.
+`tls_error`, `untrusted_peer`, `fingerprint_mismatch`, `not_found` (discovery found nothing).
 
 ## Receiver safety rules (unchanged from Milestone 2)
 - File names are sanitized (no folders, no `<>:"/\|?*`, no reserved Windows names, length limit).
@@ -47,4 +51,4 @@ Sender/joiner side only: `could_not_connect`, `file_not_found`, `file_unreadable
 - Limits: max file size, free-disk check, max concurrent transfers, max connections, TLS handshake and idle timeouts, duplicate `transfer_id` rejected.
 
 ## Not yet implemented
-Automatic discovery (Milestone 4), resume after interruption, private-key encryption at rest (see `docs/security.md`).
+Resume after interruption, private-key encryption at rest (see `docs/security.md`).
