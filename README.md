@@ -42,3 +42,19 @@ Other commands: `identity`, `peers`, `unpair NAME`. Add `--insecure` to send/rec
 
 Docs: `docs/protocol.md`, `docs/security.md`, `docs/discovery.md`.
 Never commit `devices/` or any `device.key` file.
+
+## Milestone 5: gestures
+Install the new packages (once, MediaPipe needs a matching OpenCV and an older NumPy):
+
+    pip uninstall -y opencv-python
+    pip install -r requirements.txt
+
+Try it with your camera (a hand test window):
+
+    python gesture_demo.py --list-cameras
+    python gesture_demo.py                    (send: open palm, fist, flick and open)
+    python gesture_demo.py --mode receive     (catch: open palm, fist)
+    python gesture_demo.py --calibrate        (teach it how fast your throws are)
+    python gesture_demo.py --benchmark 10     (speed numbers)
+
+Docs: `docs/gestures.md`.
