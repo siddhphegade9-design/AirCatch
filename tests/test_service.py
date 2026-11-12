@@ -261,3 +261,204 @@ def test_the_pairing_code_carries_the_real_address(tmp_path, monkeypatch):
         assert PairingPayload.parse(a.open_pairing()).host == "192.168.1.23"
     finally:
         a.stop()
+
+
+# ====================================================== addresses, fallbacks, diagnostics
+import socket  # noqa: E402
+
+from aircatch.discovery.connect import order_addresses  # noqa: E402
+from aircatch.service import KnownAddresses  # noqa: E402
+
+
+def free_port():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port                                                  # nothing listens here now
+
+
+@pytest.fixture
+def quick_pair(tmp_path):
+    a, sa = make_service(tmp_path, "Laptop-A", find_timeout=0.3)
+    b, sb = make_service(tmp_path, "Laptop-B", find_timeout=0.3)
+    yield a, sa, b, sb, tmp_path
+    a.stop()
+    b.stop()
+
+
+def test_pairing_teaches_both_devices_where_the_other_one_lives(quick_pair):
+    a, sa, b, sb, tmp = quick_pair
+    do_pairing(a, sa, b, sb)
+    assert b.known.get(a.identity.fingerprint) == ("127.0.0.1", a.port)    # from the code
+    assert a.known.get(b.identity.fingerprint) == ("127.0.0.1", b.port)    # the joiner reported its port
+
+
+def test_sending_works_without_discovery_or_a_typed_address(quick_pair):
+    """The case that matters on networks where mDNS is blocked: no list entry, no typed address."""
+    a, sa, b, sb, tmp = quick_pair
+    do_pairing(a, sa, b, sb)
+    for sender, receiver, s_sink, r_sink, name in ((b, a, sb, sa, "b2a.txt"), (a, b, sa, sb, "a2b.txt")):
+        source = tmp / name
+        source.write_text(name)
+        sender.send(receiver.identity.fingerprint, str(source), None, "")      # no manual address
+        steps = s_sink.wait_for("send_step")
+        assert "Looking for" in steps["text"]
+        offer = r_sink.wait_for("offer", lambda p, n=name: p["filename"] == n)
+        receiver.answer_offer(offer["transfer_id"], True)
+        result = s_sink.wait_for("send_result", lambda p, n=name: p["filename"] == n)
+        assert result["ok"], result
+    assert (tmp / "Laptop-A" / "inbox" / "b2a.txt").read_text() == "b2a.txt"
+    assert (tmp / "Laptop-B" / "inbox" / "a2b.txt").read_text() == "a2b.txt"
+
+
+def test_a_wrong_saved_address_fails_quickly_with_a_helpful_reason(quick_pair):
+    a, sa, b, sb, tmp = quick_pair
+    do_pairing(a, sa, b, sb)
+    b.known.set(a.identity.fingerprint, "127.0.0.1", free_port())
+    source = tmp / "lost.txt"
+    source.write_text("x")
+    started = time.monotonic()
+    b.send(a.identity.fingerprint, str(source), None, "")
+    result = sb.wait_for("send_result")
+    assert time.monotonic() - started < 8
+    assert not result["ok"] and result["reason"] == "could_not_connect"
+    assert "Firewall" in result["text"] and "Test connection" in result["text"]
+    assert "offer" not in sa.kinds()
+
+
+def test_nothing_known_and_nothing_found_is_not_found(quick_pair):
+    a, sa, b, sb, tmp = quick_pair
+    do_pairing(a, sa, b, sb)
+    b.known.forget(a.identity.fingerprint)
+    source = tmp / "n.txt"
+    source.write_text("x")
+    b.send(a.identity.fingerprint, str(source), None, "")
+    result = sb.wait_for("send_result")
+    assert result["reason"] == "not_found" and "address" in result["text"].lower()
+
+
+def test_unpairing_forgets_the_saved_address(quick_pair):
+    a, sa, b, sb, tmp = quick_pair
+    do_pairing(a, sa, b, sb)
+    assert a.known.get(b.identity.fingerprint) is not None
+    a.unpair(b.identity.fingerprint)
+    assert a.known.get(b.identity.fingerprint) is None
+
+
+def test_test_connection_reports_success_and_failure(quick_pair):
+    a, sa, b, sb, tmp = quick_pair
+    b.test_connection("", "")
+    assert "Select a paired device" in sb.wait_for("connection_result")["text"]
+    do_pairing(a, sa, b, sb)
+    b.test_connection(a.identity.fingerprint, "")                       # uses the saved address
+    ok = sb.wait_for("connection_result", lambda p: p["ok"])
+    assert "Connected to Laptop-A" in ok["text"] and str(a.port) in ok["text"]
+    b.test_connection(a.identity.fingerprint, f"127.0.0.1:{free_port()}")
+    bad = sb.wait_for("connection_result", lambda p: not p["ok"] and "Could not connect" in p["text"])
+    assert "Firewall" in bad["text"]
+    b.test_connection(a.identity.fingerprint, "nonsense")
+    assert "not valid" in sb.wait_for("connection_result", lambda p: "not valid" in p["text"])["text"]
+    assert "offer" not in sa.kinds()                                     # a test never sends anything
+
+
+def test_test_connection_notices_the_wrong_device_at_an_address(tmp_path):
+    a, sa = make_service(tmp_path, "Laptop-A", find_timeout=0.3)
+    b, sb = make_service(tmp_path, "Laptop-B", find_timeout=0.3)
+    c, sc = make_service(tmp_path, "Stranger", find_timeout=0.3)
+    try:
+        do_pairing(a, sa, b, sb)
+        b.test_connection(a.identity.fingerprint, f"127.0.0.1:{c.port}")   # that is NOT Laptop-A
+        result = sb.wait_for("connection_result", lambda p: not p["ok"])
+        assert "not the device you paired with" in result["text"]
+    finally:
+        a.stop(); b.stop(); c.stop()
+
+
+def test_a_joiner_that_does_not_report_its_port_still_pairs(quick_pair):
+    """Older versions never sent listen_port. Pairing must still work; the host just cannot learn the address."""
+    import asyncio
+    from aircatch.pairing.joiner import pair_with
+    a, sa, b, sb, tmp = quick_pair
+    payload = PairingPayload.parse(a.open_pairing())
+    local = PairingPayload("127.0.0.1", payload.port, payload.fingerprint, payload.token, payload.name)
+    outcome = {}
+    thread = threading.Thread(target=lambda: outcome.setdefault(
+        "r", asyncio.run(pair_with(local, b.identity, b.trust))))
+    thread.start()
+    sa.wait_for("pairing_request")
+    a.answer_pairing(True)
+    thread.join(15)
+    assert outcome["r"].ok
+    assert a.known.get(b.identity.fingerprint) is None
+
+
+def test_known_addresses_store(tmp_path):
+    path = tmp_path / "known.json"
+    store = KnownAddresses(path)
+    assert store.set("id1", "192.168.1.5", 5001) is True
+    assert store.set("id1", "192.168.1.5", 5001) is False                # unchanged
+    assert store.set("id2", "bad host!", 5001) is False                  # invalid host
+    assert store.set("id2", "192.168.1.6", 0) is False                   # invalid port
+    assert store.set("id2", "192.168.1.6", 70000) is False
+    assert KnownAddresses(path).get("id1") == ("192.168.1.5", 5001)      # survives a restart
+    store.forget("id1")
+    assert KnownAddresses(path).get("id1") is None
+    path.write_text("{ this is not json")
+    assert KnownAddresses(path).get("id1") is None                       # corrupt file is ignored
+    path.write_text('{"x": {"host": 5, "port": "no"}, "y": "z"}')
+    assert KnownAddresses(path).get("x") is None
+
+
+def test_addresses_on_our_own_network_are_tried_first():
+    mine = ["192.168.1.20", "172.28.80.1"]
+    ordered = order_addresses(("10.0.75.1", "192.168.56.1", "192.168.1.7", "172.28.80.9"), mine)
+    assert ordered[:2] == ["192.168.1.7", "172.28.80.9"] and len(ordered) == 4
+    assert order_addresses(("192.168.1.7",), []) == ["192.168.1.7"]
+
+
+def test_the_log_file_records_decisions_but_not_secrets(tmp_path):
+    import faulthandler
+    import logging
+    import sys
+    from aircatch import logsetup
+    path = logsetup.setup_logging(tmp_path / "cfg")
+    try:
+        assert path == tmp_path / "cfg" / "aircatch.log"
+        assert logsetup.setup_logging(tmp_path / "cfg") == path          # second call adds no duplicate
+        handlers = [h for h in logging.getLogger("aircatch").handlers if getattr(h, "_aircatch_file", False)]
+        assert len(handlers) == 1
+        logging.getLogger("aircatch.app").info("send started: 'a.txt' to 'Laptop-B'")
+        handlers[0].flush()
+        text = path.read_text("utf-8")
+        assert "AirCatch started" in text and "send started: 'a.txt'" in text
+        assert (tmp_path / "cfg" / "crash.log").exists()
+    finally:
+        for h in list(logging.getLogger("aircatch").handlers):
+            if getattr(h, "_aircatch_file", False):
+                h.close()
+                logging.getLogger("aircatch").removeHandler(h)
+        faulthandler.disable()
+        sys.excepthook = sys.__excepthook__
+        if logsetup._crash_file is not None:
+            logsetup._crash_file.close()
+
+
+def test_services_never_write_secrets_to_the_log(tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="aircatch")
+    a, sa = make_service(tmp_path, "Laptop-A", find_timeout=0.3)
+    b, sb = make_service(tmp_path, "Laptop-B", find_timeout=0.3)
+    try:
+        uri = a.open_pairing()
+        token = PairingPayload.parse(uri).token
+        payload = PairingPayload.parse(uri)
+        b.join_pairing(PairingPayload("127.0.0.1", payload.port, payload.fingerprint, token, payload.name).to_uri())
+        sa.wait_for("pairing_request")
+        a.answer_pairing(True)
+        sb.wait_for("join_result")
+    finally:
+        a.stop(); b.stop()
+    logged = caplog.text
+    assert "paired with" in logged
+    assert token not in logged and "BEGIN CERTIFICATE" not in logged and "PRIVATE KEY" not in logged

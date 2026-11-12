@@ -19,6 +19,7 @@ class FakeService:
     def join_pairing(self, text): self.calls.append(("join", text))
     def send(self, device_id, path, thumb, manual): self.calls.append(("send", device_id, path, thumb, manual))
     def cancel_send(self): self.calls.append(("cancel_send",))
+    def test_connection(self, device_id, manual): self.calls.append(("test_connection", device_id, manual))
     def unpair(self, device_id): self.calls.append(("unpair", device_id)); return True
 
     def sent(self):
@@ -38,9 +39,12 @@ class FakeWorker(QObject):
     def __init__(self, config, mode, camera_index=0):
         super().__init__()
         self.mode = mode
+        self.config = config
+        self.require_motion = config.require_motion
         self.started = False
         self.stopped = False
 
     def start(self): self.started = True
     def stop(self): self.stopped = True
     def set_mode(self, mode): self.mode = mode
+    def set_require_motion(self, value): self.require_motion = value

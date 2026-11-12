@@ -75,11 +75,17 @@ class VisionWorker(QThread):
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._pending_mode: str | None = None
+        self._pending_require_motion: bool | None = None
 
     def set_mode(self, mode: str) -> None:
         """Thread-safe: takes effect before the next frame."""
         with self._lock:
             self._pending_mode = mode
+
+    def set_require_motion(self, value: bool) -> None:
+        """Thread-safe: False = 'easy throw' (any release after a grab sends)."""
+        with self._lock:
+            self._pending_require_motion = value
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -115,8 +121,11 @@ class VisionWorker(QThread):
                     break
                 with self._lock:
                     pending, self._pending_mode = self._pending_mode, None
+                    motion, self._pending_require_motion = self._pending_require_motion, None
                 if pending is not None:
                     engine.set_mode(pending)
+                if motion is not None:
+                    engine.cfg.require_motion = motion
                 frame = cv2.flip(frame, 1)                  # mirror: feels natural
                 events = engine.update(tracker.process(frame), self._clock())
                 status = engine.status

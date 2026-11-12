@@ -213,9 +213,9 @@ def test_hand_found_again_after_loss_starts_fresh():
     assert k.count("hand_found") == 2 and k[-1] == "throw"
 
 
-# =========================================================== catching
-def test_catch_sequence():
-    events = run(receive(), [Seg(0.8, "open"), Seg(0.4, "fist")])
+# =========================================================== catching (close the fist, then open it)
+def test_catch_sequence_is_fist_then_open():
+    events = run(receive(), [Seg(0.6, "open"), Seg(0.4, "fist"), Seg(0.3, "open")])
     assert kinds(events) == ["hand_found", "ready", "catch"]
     assert events[1].detail == "catch"
 
@@ -224,13 +224,46 @@ def test_open_palm_alone_never_catches():
     assert "catch" not in kinds(run(receive(), [Seg(5, "open")]))
 
 
-def test_a_fist_too_soon_after_the_palm_appears_does_not_catch():
-    assert "catch" not in kinds(run(receive(), [Seg(0.2, "open"), Seg(1.0, "fist")]))
+def test_a_closed_fist_alone_is_armed_but_never_catches_until_it_opens():
+    k = kinds(run(receive(), [Seg(0.6, "open"), Seg(6, "fist")]))
+    assert "ready" in k and "catch" not in k
 
 
-def test_catch_cannot_repeat_while_the_hand_stays_closed():
-    events = run(receive(), [Seg(0.8, "open"), Seg(6, "fist")])
+def test_the_old_open_then_fist_order_does_not_catch():
+    assert "catch" not in kinds(run(receive(), [Seg(0.8, "open"), Seg(0.4, "fist")]))
+
+
+def test_a_flash_of_fist_is_not_enough():
+    assert "ready" not in kinds(run(receive(), [Seg(0.6, "open"), Seg(0.05, "fist"), Seg(0.5, "open")]))
+
+
+def test_a_fist_that_was_already_closed_must_open_before_it_can_catch():
+    # the hand arrives closed: opening it must NOT accept anything
+    k = kinds(run(receive(), [Seg(1.0, "fist"), Seg(0.6, "open")]))
+    assert "ready" not in k and "catch" not in k
+    # ...but after it has been seen open, a normal close-and-open works
+    k = kinds(run(receive(), [Seg(1.0, "fist"), Seg(0.5, "open"), Seg(0.4, "fist"), Seg(0.3, "open")]))
+    assert k.count("catch") == 1
+
+
+def test_switching_to_receive_with_a_closed_fist_requires_opening_first():
+    engine = GestureEngine(mode="idle")
+    run(engine, [Seg(0.6, "open"), Seg(1.0, "fist")])          # fist is showing right now
+    engine.set_mode("receive")
+    k = kinds(run(engine, [Seg(0.6, "fist"), Seg(0.4, "open")]))
+    assert "ready" not in k and "catch" not in k
+
+
+def test_catch_cannot_repeat_while_the_hand_stays_open():
+    events = run(receive(), [Seg(0.6, "open"), Seg(0.4, "fist"), Seg(6, "open")])
     assert kinds(events).count("catch") == 1
+
+
+def test_a_second_catch_needs_the_whole_gesture_again_after_the_cooldown():
+    one = [Seg(0.6, "open"), Seg(0.4, "fist"), Seg(0.3, "open")]
+    again = [Seg(2.0, "open"), Seg(0.4, "fist"), Seg(0.3, "open")]
+    assert kinds(run(receive(), one + again)).count("catch") == 2
+    assert kinds(run(receive(), one + [Seg(0.3, "fist")])).count("catch") == 1   # in cooldown
 
 
 def test_throwing_motion_does_nothing_in_receive_mode():
@@ -238,9 +271,25 @@ def test_throwing_motion_does_nothing_in_receive_mode():
     assert "throw" not in k and "grab" not in k
 
 
-def test_catch_is_forgotten_if_the_palm_goes_away():
-    script = [Seg(0.8, "open"), Seg(1.5, "victory"), Seg(0.5, "fist")]
+def test_catch_is_cancelled_if_the_hand_goes_away():
+    script = [Seg(0.6, "open"), Seg(0.4, "fist"), Seg(1.0, "open", missing=True), Seg(0.5, "open")]
+    k = kinds(run(receive(), script))
+    assert "catch" not in k and "cancelled" in k
+
+
+def test_half_open_hand_in_between_does_not_catch():
+    script = [Seg(0.6, "open"), Seg(0.4, "fist"), Seg(1.0, "victory")]
     assert "catch" not in kinds(run(receive(), script))
+
+
+def test_status_guides_both_steps_of_the_catch():
+    engine = receive()
+    run(engine, [Seg(0.6, "open"), Seg(0.5, "fist")])
+    assert engine.status.state == "catch_armed" and "open" in engine.status.hint.lower()
+    assert receive().status.hint == "Show your hand to the camera"
+    idle = receive()
+    run(idle, [Seg(0.6, "open")])
+    assert "fist" in idle.status.hint.lower()
 
 
 # =========================================================== modes

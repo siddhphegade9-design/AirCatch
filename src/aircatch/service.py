@@ -14,13 +14,18 @@ hears back through a single `emit(kind, payload)` callback. Event kinds:
   pairing_closed   {}
   paired           {name}                           (someone paired with us)
   join_result      {ok, text}                       (the result of us joining someone else)
+  send_step        {text}                           ("Looking for X...", "Connecting to ...")
+  connection_result {ok, text}                      (answer to "Test connection")
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import re
+import ssl
 import threading
 from pathlib import Path
 from typing import Callable
@@ -31,6 +36,7 @@ from aircatch.discovery.net import lan_ipv4_addresses
 from aircatch.discovery.service import Advertiser
 from aircatch.pairing.joiner import pair_with
 from aircatch.pairing.payload import PairingPayload, PayloadError
+from aircatch.security import tls
 from aircatch.security.identity import DeviceIdentity, load_or_create
 from aircatch.security.trust import TrustedPeer, TrustStore
 from aircatch.transfer.events import TransferEvent
@@ -44,9 +50,11 @@ Emit = Callable[[str, dict], None]
 
 REASONS = {
     "declined": "The other device said no.",
-    "not_found": "Could not find that device on the network. Is AirCatch open there, on the same "
-                 "Wi-Fi? You can also type its address.",
-    "could_not_connect": "Could not connect. Check the address and the firewall (Private networks).",
+    "not_found": "Could not find that device on the network, and no saved address worked. Open "
+                 "AirCatch there on the same Wi-Fi, or type its address. Use Test connection to check.",
+    "could_not_connect": "Could not connect to the other PC. Check that AirCatch is open there, that "
+                         "both PCs are on the same network, and that Windows Firewall allows AirCatch "
+                         "on Private networks. Use Test connection to find out why.",
     "not_paired": "The devices are not paired (or one side unpaired). Pair them again.",
     "untrusted_peer": "That device is not the one you paired with. Nothing was sent.",
     "too_large": "The file is bigger than the other device allows.",
@@ -73,6 +81,51 @@ def reason_text(reason: str) -> str:
 
 
 _HOST = re.compile(r"^[A-Za-z0-9.\-]{1,253}$")
+
+
+class KnownAddresses:
+    """Where each paired device was last reached: device_id -> (address, port).
+
+    A fallback for networks where discovery (mDNS) does not work. It is learned when two devices
+    pair and whenever discovery sees a device, and it is only ever a hint: the connection is still
+    pinned to the paired certificate, so a wrong or stale address can only fail, never mislead.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._data: dict[str, tuple[str, int]] = {}
+        try:
+            raw = json.loads(path.read_text("utf-8"))
+            for device_id, entry in raw.items():
+                host, port = entry["host"], entry["port"]
+                if isinstance(host, str) and _HOST.match(host) and isinstance(port, int) \
+                        and not isinstance(port, bool) and 1 <= port <= 65535:
+                    self._data[str(device_id)] = (host, port)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self._data = {}
+
+    def get(self, device_id: str) -> tuple[str, int] | None:
+        return self._data.get(device_id)
+
+    def set(self, device_id: str, host: str, port: int) -> bool:
+        if not (_HOST.match(host) and 1 <= port <= 65535) or self._data.get(device_id) == (host, port):
+            return False
+        self._data[device_id] = (host, port)
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({k: {"host": h, "port": p} for k, (h, p) in self._data.items()}),
+                           "utf-8")
+            os.replace(tmp, self._path)
+        except OSError:
+            log.warning("could not save known addresses", exc_info=True)
+        return True
+
+    def forget(self, device_id: str) -> None:
+        if self._data.pop(device_id, None) is not None:
+            with contextlib.suppress(OSError):
+                self._path.write_text(json.dumps({k: {"host": h, "port": p}
+                                                  for k, (h, p) in self._data.items()}), "utf-8")
 
 
 def lan_addresses_preferred_first() -> list[str]:
@@ -121,6 +174,7 @@ class NetworkService(threading.Thread):
         self.receiver: Receiver | None = None
         self.discovery: Discovery | None = None
         self.advertiser: Advertiser | None = None
+        self.known: KnownAddresses | None = None
         self.port: int = 0
         self._stop_event: asyncio.Event | None = None
         self._offers: dict[str, asyncio.Future] = {}
@@ -172,6 +226,7 @@ class NetworkService(threading.Thread):
         self._config_dir.mkdir(parents=True, exist_ok=True)
         self.identity = load_or_create(self._config_dir, self._wanted_name)
         self.trust = TrustStore(self._config_dir / "trusted_peers.json")
+        self.known = KnownAddresses(self._config_dir / "known_addresses.json")
         azc = None
         try:
             self.receiver = Receiver(
@@ -209,6 +264,8 @@ class NetworkService(threading.Thread):
                 log.warning("could not start discovery", exc_info=True)
             text = (f"Visible on this network · port {self.port}" if advertised
                     else f"Listening on port {self.port} (not visible to others)")
+            log.info("service ready: %s as '%s' addresses=%s advertised=%s", text, self.identity.name,
+                     addresses, advertised)
             self._emit("status", {"text": text, "ready": True, "port": self.port,
                                   "name": self.identity.name})
             self._publish_devices()
@@ -256,6 +313,8 @@ class NetworkService(threading.Thread):
         items: list[dict] = []
         for peer in self.trust.peers():
             device = online.get(peer.device_id)
+            if device is not None and device.addresses and self.known is not None:
+                self.known.set(peer.device_id, device.addresses[0], device.port)
             items.append({"device_id": peer.device_id, "name": peer.name, "paired": True,
                           "online": device is not None,
                           "address": device.addresses[0] if device and device.addresses else "",
@@ -266,6 +325,7 @@ class NetworkService(threading.Thread):
                               "address": device.addresses[0] if device.addresses else "",
                               "status": "NOT PAIRED"})
         if items != self._last_devices:
+            log.info("devices: %s", [(i["name"], i["status"], i["address"]) for i in items])
             self._last_devices = items
             self._emit("devices", {"items": items})
 
@@ -273,6 +333,9 @@ class NetworkService(threading.Thread):
         if self.trust is None:
             return False
         removed = self.trust.remove(device_id)
+        if self.known is not None:
+            self.known.forget(device_id)
+        log.info("unpaired a device (removed=%s)", removed)
         self._call_soon(self._publish_devices)
         return removed
 
@@ -346,6 +409,10 @@ class NetworkService(threading.Thread):
         self._call_soon(resolve)
 
     def _on_paired(self, peer: TrustedPeer) -> None:
+        address = self.receiver.paired_address(peer.device_id) if self.receiver else None
+        if address is not None and self.known is not None:
+            self.known.set(peer.device_id, address[0], address[1])
+        log.info("paired with '%s' (address learned: %s)", peer.name, address)
         self._emit("paired", {"name": peer.name})
         self._publish_devices()
 
@@ -361,8 +428,12 @@ class NetworkService(threading.Thread):
         except PayloadError as exc:
             self._emit("join_result", {"ok": False, "text": f"That is not a pairing code: {exc}."})
             return
-        result = await pair_with(payload, self.identity, self.trust)
+        log.info("joining a pairing at %s:%s", payload.host, payload.port)
+        result = await pair_with(payload, self.identity, self.trust, listen_port=self.port)
+        log.info("join result: ok=%s reason=%s", result.ok, result.reason)
         if result.ok and result.peer is not None:
+            if self.known is not None:
+                self.known.set(result.peer.device_id, payload.host, payload.port)
             if self.receiver is not None:
                 self.receiver.allow_peer(result.peer)
             self._emit("join_result", {"ok": True, "text": f"Paired with {result.peer.name}."})
@@ -401,29 +472,46 @@ class NetworkService(threading.Thread):
             return
         self._send_task = asyncio.ensure_future(self._do_send(peer, Path(path), thumbnail, manual))
 
+    def _step(self, text: str) -> None:
+        log.info("send step: %s", text)
+        self._emit("send_step", {"text": text})
+
+    async def _send_to(self, address: tuple[str, int], path: Path, peer: TrustedPeer,
+                       thumbnail: bytes | None):
+        assert self.identity is not None
+        return await send_file(address[0], address[1], path, sender_name=self.identity.name,
+                               on_event=self._on_transfer_event, identity=self.identity, peer=peer,
+                               thumbnail=thumbnail, connect_timeout=5.0)
+
     async def _do_send(self, peer: TrustedPeer, path: Path, thumbnail: bytes | None,
                        manual: str) -> None:
-        assert self.identity is not None and self.discovery is not None
+        assert self.identity is not None and self.discovery is not None and self.known is not None
         filename = path.name
+        log.info("send: '%s' to '%s' (typed address: %s)", filename, peer.name, manual.strip() or "none")
         try:
+            known = self.known.get(peer.device_id)
+            result = None
             if manual.strip():
                 address = parse_address(manual)
                 if address is None:
                     self._fail_send(filename, "bad_address")
                     return
-                result = await send_file(address[0], address[1], path,
-                                         sender_name=self.identity.name,
-                                         on_event=self._on_transfer_event, identity=self.identity,
-                                         peer=peer, thumbnail=thumbnail)
+                self._step(f"Connecting to {peer.name} at {address[0]}...")
+                result = await self._send_to(address, path, peer, thumbnail)
             else:
-                device = await self.discovery.find(peer, self._find_timeout)
-                if device is None:
+                self._step(f"Looking for {peer.name} on the network...")
+                device = await self.discovery.find(
+                    peer, min(2.5, self._find_timeout) if known else self._find_timeout)
+                if device is not None:
+                    result = await send_to_discovered(
+                        device, path, identity=self.identity, sender_name=self.identity.name,
+                        on_event=self._on_transfer_event, thumbnail=thumbnail, on_step=self._step)
+                if (result is None or result.reason == "could_not_connect") and known:
+                    self._step(f"Trying {peer.name} at its last known address {known[0]}...")
+                    result = await self._send_to(known, path, peer, thumbnail)
+                if result is None:
                     self._fail_send(filename, "not_found")
                     return
-                result = await send_to_discovered(device, path, identity=self.identity,
-                                                  sender_name=self.identity.name,
-                                                  on_event=self._on_transfer_event,
-                                                  thumbnail=thumbnail)
         except asyncio.CancelledError:
             self._fail_send(filename, "cancelled")
             raise
@@ -431,8 +519,73 @@ class NetworkService(threading.Thread):
             log.exception("sending failed unexpectedly")
             self._fail_send(filename, "error")
             return
+        log.info("send result: ok=%s reason=%s seconds=%.2f", result.ok, result.reason or "-",
+                 result.seconds)
         self._emit("send_result", {
             "ok": result.ok, "reason": result.reason,
             "text": "" if result.ok else reason_text(result.reason), "filename": filename,
             "saved_as": result.saved_as, "seconds": result.seconds, "mb_s": result.mb_per_second,
             "receiver": result.receiver_name})
+
+    # ------------------------------------------------------------------ "Test connection"
+    def test_connection(self, device_id: str, manual_address: str = "") -> None:
+        """Check whether we can reach a paired device. The answer arrives as 'connection_result'."""
+        if self._schedule(self._test_connection(device_id, manual_address)) is None:
+            self._emit("connection_result", {"ok": False, "text": "The network service is not ready yet."})
+
+    async def _probe(self, peer: TrustedPeer, host: str, port: int) -> tuple[bool, str]:
+        assert self.identity is not None
+        context = tls.build_client_context(self.identity, peer.cert_pem)
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port, ssl=context, server_hostname="aircatch"), 4.0)
+        except ssl.SSLError:
+            return False, "answered, but it is not the device you paired with"
+        except (OSError, asyncio.TimeoutError):
+            return False, "no answer"
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+        return True, ""
+
+    async def _test_connection(self, device_id: str, manual: str) -> None:
+        assert self.trust is not None and self.discovery is not None and self.known is not None
+        peer = self.trust.get(device_id) if device_id else None
+        if peer is None:
+            self._emit("connection_result", {"ok": False, "text": "Select a paired device first."})
+            return
+        candidates: list[tuple[str, int, str]] = []
+        if manual.strip():
+            address = parse_address(manual)
+            if address is None:
+                self._emit("connection_result", {"ok": False, "text": reason_text("bad_address")})
+                return
+            candidates.append((address[0], address[1], "the address you typed"))
+        else:
+            device = await self.discovery.find(peer, min(2.5, self._find_timeout))
+            if device is not None:
+                from aircatch.discovery.connect import order_addresses
+                candidates += [(a, device.port, "found on the network")
+                               for a in order_addresses(device.addresses)]
+            known = self.known.get(peer.device_id)
+            if known and all((known[0], known[1]) != (h, p) for h, p, _ in candidates):
+                candidates.append((known[0], known[1], "its last known address"))
+        if not candidates:
+            self._emit("connection_result", {"ok": False, "text": (
+                f"{peer.name} is not visible on the network and no address is saved. Type its "
+                f"address (like 192.168.1.23:5001) in the Address box, or pair again.")})
+            return
+        tried = []
+        for host, port, source in candidates:
+            ok, detail = await self._probe(peer, host, port)
+            log.info("connection test to '%s' at %s:%s: %s", peer.name, host, port, detail or "ok")
+            if ok:
+                self.known.set(peer.device_id, host, port)
+                self._emit("connection_result", {"ok": True, "text": (
+                    f"Connected to {peer.name} at {host}:{port} ({source}). Sending will work.")})
+                return
+            tried.append(f"{host}:{port} ({detail})")
+        self._emit("connection_result", {"ok": False, "text": (
+            f"Could not connect to {peer.name}. Tried " + ", ".join(tried) + ". Check that AirCatch is "
+            "open there, both PCs are on the same network, and Windows Firewall allows AirCatch on "
+            "Private networks.")})

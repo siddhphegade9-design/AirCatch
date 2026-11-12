@@ -12,7 +12,7 @@ pop up on the other device, catch it, and get a checked file.
 | Grab (fist) | The card **zooms out** to half size and follows your hand | | gesture `grab` |
 | Throw (flick) | The card shrinks and **flies off** in your throw direction | | gesture `throw` starts a real `send_file` |
 | Offer arrives | "Waiting for X to catch..." | The thumbnail **rises from the bottom to the middle**, floats and glows | receiver `offer` |
-| Catch | | A small pulse, then a progress ring fills | gesture `catch` (or the Catch button) |
+| Catch | | A small pulse, then a progress ring fills | gesture `catch`: **close your fist, then open it** (or the Catch button) |
 | Bytes move | Progress bar | Progress ring | real `progress` events |
 | Verified | "Delivered" | The file **zooms in** with a green check, Open / Show folder / Done | receiver `completed` (saved AND SHA-256 matched) |
 | Failure | The card comes back with a red flash and the reason | Red shake, then close | `failed` / `rejected` |
@@ -24,6 +24,11 @@ Rules this follows:
 - When an offer arrives the app switches itself to RECEIVE mode so your catch gesture works, and
   switches back afterwards.
 - Everything also works with buttons (Send, Catch, Decline), so a demo never depends on the camera.
+- **Easy throw** (switch under the camera view, on by default): opening your hand after a grab always sends,
+  with no fast flick needed. Switch it off to require a real flick; then a gentle release shows
+  "NOT SENT: released too gently (speed 3.2, needs 7.5)" so you can see exactly why.
+- The receiving gesture is **fist, then open**. A hand that is already closed when the offer arrives must
+  open first, so an old fist can never accept a file by accident.
 
 ## Run
 
@@ -98,6 +103,21 @@ just paired (as the joining side) receive files right away.
   if anything is off. A bad preview never rejects or breaks a transfer.
 - Only one incoming file at a time; a second one is declined automatically.
 - Unpairing asks twice ("Unpair", then "Sure?").
+
+## When a file does not arrive: diagnostics built into the app
+
+- **Live send status** on the card: "Looking for PC-2...", "Connecting to PC-2 at 192.168.1.20...",
+  "Waiting for PC-2 to catch it...". A failure keeps the card red and says why and what to check.
+- **Test connection** (Devices card): checks, with the real secure handshake and without sending anything,
+  whether this PC can reach the selected device, and tells you which address worked or what to fix.
+- **Remembered addresses**: when two devices pair, each learns where the other one is, so sending works
+  even on networks that block discovery. A wrong or old address can only fail; the connection is still
+  pinned to the paired certificate.
+- An "offline" device is **tried anyway** instead of being blocked.
+- **Open log folder** (Activity card): `aircatch.log` records gestures (with speeds), every send step and
+  result, addresses tried, offers, and errors. `crash.log` captures a hard crash. They contain file names
+  and sizes, never file contents, pairing codes, certificates or keys. Send me `aircatch.log` if something
+  misbehaves.
 
 ## Tests
 

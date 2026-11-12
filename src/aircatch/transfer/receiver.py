@@ -124,6 +124,7 @@ class Receiver:
         self._tls_handshake_timeout = tls_handshake_timeout
         self._ssl_ctx: ssl.SSLContext | None = None
         self._pairing: PairingSession | None = None
+        self._paired_addresses: dict[str, tuple[str, int]] = {}
 
     # ---------- lifecycle ----------
     async def start(self, host: str = "0.0.0.0", port: int = 0) -> int:
@@ -261,6 +262,10 @@ class Receiver:
         return PairingPayload(advertise_host, self.port, self._identity.fingerprint,
                               session.token, self._identity.name)
 
+    def paired_address(self, device_id: str) -> tuple[str, int] | None:
+        """(address, port) a device told us it can be reached at when it paired, if it said."""
+        return self._paired_addresses.get(device_id)
+
     def allow_peer(self, peer: TrustedPeer) -> None:
         """Let a device we just paired with (as the joining side) through TLS right away."""
         if self._ssl_ctx is not None:
@@ -302,6 +307,10 @@ class Receiver:
             return
 
         name = clean_device_name(name)
+        listen_port = msg.get("listen_port")
+        if not (isinstance(listen_port, int) and not isinstance(listen_port, bool)
+                and 1 <= listen_port <= 65535):
+            listen_port = None
         session.in_progress = True
         try:
             approved = True
@@ -320,6 +329,8 @@ class Receiver:
                 await refuse("declined")
                 return
             session.close()                       # single use
+            if listen_port is not None:           # where this device can be reached later
+                self._paired_addresses[joiner_fp] = (peer_address.rpartition(":")[0], listen_port)
             self._trust.add(TrustedPeer(joiner_fp, name, cert_pem))
             if self._ssl_ctx is not None:         # let the new device through TLS right away
                 self._ssl_ctx.load_verify_locations(cadata=cert_pem)

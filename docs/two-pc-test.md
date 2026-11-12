@@ -97,6 +97,16 @@ Sending still works. Clear the box when you want automatic discovery again.
 
 If joining fails, check the address inside the code (`h=...`): it must be PC-1's Wi-Fi address from `ipconfig`.
 
+## 4b. If nothing arrives: three quick checks (do these before anything else)
+
+1. **Click Test connection** in the Devices card on the sending PC (with PC-2 selected). It says either
+   "Connected to PC-2 at ..." (the network is fine) or exactly what failed. If it fails, fix the network or
+   firewall first (see section 10); no gesture can work until this is green.
+2. **Send with the Send button** instead of a gesture. If this works, the network is fine and only the
+   gesture needs tuning. If it fails, read the red message on the card.
+3. **Open the log folder** (Activity card, "Open log folder") on both PCs and send me `aircatch.log`.
+   It shows every gesture (with speeds), every address that was tried, and the reason for any failure.
+
 ## 5. Test A: PC-1 sends a picture to PC-2 (buttons only)
 
 1. PC-1: drop a picture on the window (or **Choose file**). The card shows the real picture.
@@ -130,9 +140,13 @@ Camera on PC-1 (sender) and, if it has one, PC-2 (receiver). Good light on your 
    (**the card zooms out and follows your hand**), then flick sideways while opening the hand
    (**the card flies away**, a real send starts).
 3. PC-2: **Start camera** (the app switches itself to RECEIVE when something arrives). When the picture
-   rises, hold an open palm towards the camera for about half a second, then close it into a fist.
-   That is the catch.
-4. If a gesture misbehaves, run `python gesture_demo.py --calibrate` on that PC, or use the buttons.
+   rises, **close your fist, then open it** (like releasing something). The card tells you each step:
+   "Close your fist, then open it to receive", then "Now open your hand to receive". If your hand is
+   already closed when the picture arrives, open it first, then close and open again.
+4. The chip in the top-left of the camera view shows the last gesture the app understood (with the speed of
+   a throw). If a release shows "NOT SENT: released too gently", flick faster, run
+   `python gesture_demo.py --calibrate`, or leave **Easy throw** on.
+5. If a gesture misbehaves, use the buttons: they do exactly the same real transfer.
 
 Write down: how many of 10 throws worked, how many catches worked, and whether anything triggered by accident.
 
@@ -188,7 +202,8 @@ measurement of your setup, not a promise.
 | "Wrong or already used pairing code" | Codes work once for 2 minutes. Click **Pair a device** again for a new one. |
 | Paired but always OFFLINE | Discovery (mDNS) blocked. Use the **Address** box. Or start with `python run.py --interface <this PC's Wi-Fi IP>`. |
 | "That is not the one you paired with" (`untrusted_peer`) | A device was reinstalled or its config folder was changed. Unpair on both, pair again. |
-| Nothing happens when you throw | You need a file chosen and a **paired, ONLINE** device selected (or an address typed). A message at the bottom says which one is missing. |
+| Nothing happens when you throw | You need a file chosen and a paired device selected; the card flashes red and says which is missing. A device shown OFFLINE is still tried. Look at the chip in the camera view: it shows the last gesture and, for a release that was too gentle, the speed it measured. |
+| Card flies away, nothing appears on the other PC | Click **Test connection**. Read the red message on the card: it says whether the device was not found, could not be connected to, or declined. |
 | Camera does not open | Close other apps using it. Check Settings > Privacy & security > Camera. Run `python gesture_demo.py --list-cameras` and start with `--camera N`. |
 | Gesture feels slow or misses | Better light, plain background. Run `python gesture_demo.py --calibrate`. |
 | Animations stutter | Switch on **Reduce motion** (Activity card). Tell me the PC model; I'll tune it. |

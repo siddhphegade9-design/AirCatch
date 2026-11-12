@@ -11,6 +11,7 @@ Design rules (from the project brief):
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import time
@@ -28,6 +29,8 @@ from aircatch.service import NetworkService, reason_text
 from aircatch.ui.thumbnails import (decode_incoming_preview, file_kind, human_size, jpeg_for_offer,
                                     load_preview)
 from aircatch.ui.vision_worker import VisionWorker
+
+log = logging.getLogger("aircatch.app")
 
 # Opening one of these would run code. AirCatch never launches them; it only shows the folder.
 RISKY_EXTENSIONS = {".exe", ".bat", ".cmd", ".com", ".scr", ".msi", ".ps1", ".vbs", ".vbe", ".js",
@@ -151,6 +154,8 @@ _DEFAULTS: dict = {
     "receiveProgress": 0.0, "receivedName": "",
     "transferLabel": "No active transfer", "transferProgress": 0.0,
     "history": [], "reducedMotion": False, "pairingUri": "", "qrVersion": 0,
+    "easyThrow": True, "lastGesture": "", "sendStep": "",
+    "connectionNote": "", "connectionOk": False, "testingConnection": False,
 }
 
 
@@ -174,6 +179,8 @@ class AppController(QObject):
     receivedNameChanged = Signal(); transferLabelChanged = Signal()
     transferProgressChanged = Signal(); historyChanged = Signal(); reducedMotionChanged = Signal()
     pairingUriChanged = Signal(); qrVersionChanged = Signal()
+    easyThrowChanged = Signal(); lastGestureChanged = Signal(); sendStepChanged = Signal()
+    connectionNoteChanged = Signal(); connectionOkChanged = Signal(); testingConnectionChanged = Signal()
     # events (not state)
     toastChanged = Signal()
     pairingRequest = Signal(str, str)
@@ -232,6 +239,13 @@ class AppController(QObject):
     reducedMotion = Property(bool, lambda s: s._v["reducedMotion"], notify=reducedMotionChanged)
     pairingUri = Property(str, lambda s: s._v["pairingUri"], notify=pairingUriChanged)
     qrVersion = Property(int, lambda s: s._v["qrVersion"], notify=qrVersionChanged)
+    easyThrow = Property(bool, lambda s: s._v["easyThrow"], notify=easyThrowChanged)
+    lastGesture = Property(str, lambda s: s._v["lastGesture"], notify=lastGestureChanged)
+    sendStep = Property(str, lambda s: s._v["sendStep"], notify=sendStepChanged)
+    connectionNote = Property(str, lambda s: s._v["connectionNote"], notify=connectionNoteChanged)
+    connectionOk = Property(bool, lambda s: s._v["connectionOk"], notify=connectionOkChanged)
+    testingConnection = Property(bool, lambda s: s._v["testingConnection"],
+                                 notify=testingConnectionChanged)
     toast = Property(str, lambda s: s._toast_text, notify=toastChanged)
     devices = Property(QObject, lambda s: s._devices, constant=True)
 
@@ -252,6 +266,7 @@ class AppController(QObject):
         self._thumb_jpeg = b""
         self._offer_id = ""
         self._received: str | None = None
+        self._throw_speed = 6.0
         self._mode_before_offer: str | None = None
         self._toast_text = ""
         self._last_toast_text, self._last_toast_time = "", 0.0
@@ -320,6 +335,7 @@ class AppController(QObject):
         try:
             data = json.loads(self._ui_settings_path().read_text("utf-8"))
             self._v["reducedMotion"] = bool(data.get("reduced_motion", False))
+            self._v["easyThrow"] = bool(data.get("easy_throw", True))
         except (OSError, ValueError, AttributeError):
             pass
 
@@ -327,7 +343,8 @@ class AppController(QObject):
         try:
             self._settings.config_dir.mkdir(parents=True, exist_ok=True)
             self._ui_settings_path().write_text(
-                json.dumps({"reduced_motion": self._v["reducedMotion"]}), "utf-8")
+                json.dumps({"reduced_motion": self._v["reducedMotion"],
+                            "easy_throw": self._v["easyThrow"]}), "utf-8")
         except OSError:
             pass
 
@@ -335,6 +352,19 @@ class AppController(QObject):
     def toggleReducedMotion(self) -> None:
         self._set("reducedMotion", not self._v["reducedMotion"])
         self._save_ui_settings()
+
+    @Slot()
+    def toggleEasyThrow(self) -> None:
+        """Easy throw: opening your hand after a grab always sends (no fast flick needed)."""
+        self._set("easyThrow", not self._v["easyThrow"])
+        if self._worker is not None:
+            self._worker.set_require_motion(not self._v["easyThrow"])
+        self._save_ui_settings()
+        log.info("easy throw is now %s", "on" if self._v["easyThrow"] else "off")
+
+    @Slot()
+    def openLogFolder(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._settings.config_dir)))
 
     # ------------------------------------------------------------------ phases and timers
     def _set_sender_phase(self, phase: str) -> None:
@@ -370,7 +400,10 @@ class AppController(QObject):
     def _start_camera(self) -> None:
         if self._worker is not None:
             return
-        worker = self._worker_factory(self._gesture_config(), self._v["mode"],
+        config = self._gesture_config()
+        config.require_motion = not self._v["easyThrow"]
+        self._throw_speed = config.throw_speed
+        worker = self._worker_factory(config, self._v["mode"],
                                       camera_index=self._settings.camera_index)
         worker.live.connect(self._camera_live)
         worker.frameReady.connect(self._on_frame)
@@ -427,28 +460,49 @@ class AppController(QObject):
             self._set("handX", round(min(1.0, max(0.0, status.palm_center[0] / aspect)), 3))
             self._set("handY", round(min(1.0, max(0.0, status.palm_center[1])), 3))
 
+    def _gesture_note(self, text: str) -> None:
+        self._set("lastGesture", text)
+        log.info("gesture: %s", text)
+
     def _on_gestures(self, events) -> None:
         """Gesture events in; decisions out. Nothing here touches the network directly."""
         for event in events:
             kind = event.kind
-            if kind == "grab":
+            if kind == "ready":
+                self._gesture_note("FIST CLOSED, now open your hand to receive" if event.detail == "catch"
+                                   else "READY, make a fist to grab")
+            elif kind == "grab":
+                self._gesture_note("GRAB")
                 if not self._v["hasFile"]:
                     self._toast("Choose a file first, then grab it.")
                 elif self._v["senderPhase"] == "idle":
                     self._set_sender_phase("holding")
             elif kind == "throw":
+                self._gesture_note(f"THROW {event.detail}, speed {event.speed:.1f}")
                 if self._v["mode"] == "send":
                     if not self._start_send(event.direction) and self._v["senderPhase"] == "holding":
                         self._set_sender_phase("idle")
-            elif kind in ("drop", "cancelled"):
+            elif kind == "drop":
+                if event.detail == "timeout":
+                    text = "NOT SENT: you held the file too long"
+                else:
+                    text = (f"NOT SENT: released too gently (speed {event.speed:.1f}, needs "
+                            f"{self._throw_speed:.1f}). Flick faster or switch on Easy throw")
+                self._gesture_note(text)
+                if self._v["senderPhase"] == "holding":
+                    self._toast(text.replace("NOT SENT: ", "Not sent: "))
+                    self._set_sender_phase("idle")
+            elif kind == "cancelled":
+                self._gesture_note("CANCELLED (the hand left the picture)")
                 if self._v["senderPhase"] == "holding":
                     self._set_sender_phase("idle")
             elif kind == "catch":
+                self._gesture_note("CATCH")
                 if self._v["receivePhase"] == "offered":
                     self._log("Caught", self._v["incomingName"])
                     self.acceptIncoming()
                 else:
-                    self._toast("Nothing to catch right now.")
+                    self._toast("Nothing to catch yet: the sender has to throw a file first.")
 
     def _apply_mode(self, mode: str) -> None:
         self._set("mode", mode)
@@ -558,33 +612,46 @@ class AppController(QObject):
         """The button version of a throw."""
         self._start_send((0.0, -1.0))
 
+    def _problem(self, text: str) -> None:
+        """Show, on the card itself, why nothing was sent (red flash and a message)."""
+        log.info("not sent: %s", text)
+        self._toast(text)
+        if self._v["senderPhase"] in BUSY_PHASES:
+            return
+        self._set("senderMessage", text)
+        self._set_sender_phase("failed")
+        self._after(3200, "failed", "idle")
+
     def _start_send(self, direction=(0.0, -1.0)) -> bool:
         """Start a REAL transfer. Returns False (and explains why) when it cannot start."""
         if self._v["senderPhase"] in BUSY_PHASES:
             self._toast("A transfer is already running.")
             return False
         if self._file_path is None:
+            log.info("not sent: no file chosen")
             self._toast("Choose a file first.")
             return False
         device = self._selected_device()
         if device is None or not device["paired"]:
-            self._toast("Pair a device and select it first.")
-            return False
-        if not device["online"] and not self._v["manualAddress"]:
-            self._toast(f"{device['name']} is not visible on the network. Check that AirCatch is "
-                        "open there, or type its address.")
+            self._problem("Pair a device and select it in the Devices list first.")
             return False
         if not self._file_path.is_file():
-            self._toast("That file no longer exists.")
             self.clearFile()
+            self._toast("That file no longer exists.")
             return False
+        # An 'offline' device is still tried: discovery can be wrong or slow, and the attempt
+        # (saved address, typed address) either works or fails with a clear reason on the card.
         dx, dy = direction
         length = (dx * dx + dy * dy) ** 0.5
         dx, dy = (dx / length, dy / length) if length > 0.2 else (0.0, -1.0)
+        log.info("send started: '%s' to '%s' (device shown as %s, typed address: %s)",
+                 self._file_path.name, device["name"], device["status"],
+                 self._v["manualAddress"] or "none")
         self._set("throwDx", dx)
         self._set("throwDy", dy)
         self._set("sendProgress", 0.0)
         self._set("senderMessage", "")
+        self._set("sendStep", f"Looking for {device['name']}...")
         self._set("transferLabel", f"Sending {self._v['fileName']} to {device['name']}")
         self._set("transferProgress", 0.0)
         self._set_sender_phase("launched")
@@ -593,6 +660,18 @@ class AppController(QObject):
         self._service.send(device["device_id"], str(self._file_path), self._thumb_jpeg,
                            self._v["manualAddress"])
         return True
+
+    @Slot()
+    def testConnection(self) -> None:
+        device = self._selected_device()
+        if device is None or not device["paired"]:
+            self._set("connectionOk", False)
+            self._set("connectionNote", "Select a paired device first.")
+            return
+        self._set("testingConnection", True)
+        self._set("connectionOk", False)
+        self._set("connectionNote", f"Testing the connection to {device['name']}...")
+        self._service.test_connection(device["device_id"], self._v["manualAddress"])
 
     @Slot()
     def cancelSend(self) -> None:
@@ -706,6 +785,8 @@ class AppController(QObject):
         self._update_devices(p["items"])
 
     def _net_offer(self, p: dict) -> None:
+        log.info("offer received: '%s' (%d bytes) from '%s', preview %d bytes", p["filename"],
+                 p["size"], p["sender"], len(p.get("thumbnail", b"")))
         self._show_offer(p)
 
     def _net_offer_closed(self, p: dict) -> None:
@@ -723,7 +804,9 @@ class AppController(QObject):
     def _on_send_event(self, event) -> None:
         if self._v["senderPhase"] not in BUSY_PHASES:
             return
-        if event.kind == "accepted":
+        if event.kind == "offer":
+            self._set("sendStep", f"Waiting for {self._v['selectedDeviceName']} to catch it...")
+        elif event.kind == "accepted":
             self._set_sender_phase("sending")
         elif event.kind == "progress" and event.total:
             self._set_sender_phase("sending")
@@ -739,7 +822,18 @@ class AppController(QObject):
             self._refresh_can_send()
             self._after(2600, "done", "idle")
 
+    def _net_send_step(self, p: dict) -> None:
+        if self._v["senderPhase"] in ("launched", "waiting"):
+            self._set("sendStep", p["text"])
+
+    def _net_connection_result(self, p: dict) -> None:
+        self._set("connectionOk", bool(p["ok"]))
+        self._set("connectionNote", p["text"])
+        self._set("testingConnection", False)
+        log.info("connection test: ok=%s %s", p["ok"], p["text"])
+
     def _net_send_result(self, p: dict) -> None:
+        log.info("send result: ok=%s reason=%s", p["ok"], p.get("reason") or "-")
         if not p["ok"]:
             self._send_failed(p["text"] or "The transfer failed.")
 
@@ -754,6 +848,7 @@ class AppController(QObject):
         elif event.kind == "verifying":
             self._set("receivePhase", "verifying")
         elif event.kind == "completed":                   # saved AND hash verified
+            log.info("received and verified: '%s'", event.filename)
             self._received = event.path
             self._set("receiveProgress", 1.0)
             self._set("transferProgress", 1.0)
@@ -762,6 +857,7 @@ class AppController(QObject):
             self._log("Received", f"{event.filename} ← {event.peer}")
             self._dismiss_timer.start(15000)
         elif event.kind == "failed":
+            log.info("receive failed: '%s' reason=%s", event.filename, event.message)
             self._set("receiveMessage", reason_text(event.message))
             self._set("receivePhase", "failed")
             self._log("Receive failed", f"{event.filename} · {event.message}")
@@ -807,6 +903,7 @@ class AppController(QObject):
         self._service.join_pairing(text)
 
     def _net_pairing_request(self, p: dict) -> None:
+        log.info("pairing request from '%s'", p["name"])
         self.pairingRequest.emit(p["name"], p["address"])
 
     def _net_pairing_closed(self, p: dict) -> None:

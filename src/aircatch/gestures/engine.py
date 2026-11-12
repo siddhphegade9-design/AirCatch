@@ -5,12 +5,13 @@ It knows nothing about cameras, windows or the network, so the tracker, the scre
 transfer code can each be replaced without touching it.
 
 SEND mode      open palm (held) -> fist (held) = GRAB -> hand opens with a fast flick = THROW
-RECEIVE mode   open palm (held) -> fist (held) = CATCH
+RECEIVE mode   fist (held) -> hand opens = CATCH (close your fist, then release it)
 IDLE mode      tracking and feedback only; no gesture events
 
 Why this does not misfire:
   * a pose must win a vote over a short time window before it counts (no single-frame glitches);
-  * a grab only starts from a held open palm (a hand that merely appears as a fist does nothing);
+  * a grab only starts from a held open palm, and a catch only starts from a fist that was formed after
+    the hand was seen open (a hand that merely appears as a fist does nothing);
   * after a throw or catch there is a cooldown, and the full open-fist-open cycle must be repeated,
     so holding a gesture on screen can never trigger twice;
   * if the hand disappears for longer than a short grace period, the armed gesture is cancelled.
@@ -34,10 +35,10 @@ _HINTS = {
     (NO_HAND, "send"): "Show your hand to the camera",
     (NO_HAND, "receive"): "Show your hand to the camera",
     (IDLE, "send"): "Open your palm",
-    (IDLE, "receive"): "Hold your palm open to get ready to catch",
+    (IDLE, "receive"): "Close your fist, then open it to receive",
     (READY, "send"): "Make a fist to grab the file",
     (HOLDING, "send"): "Flick your hand and open it to throw",
-    (CATCH_ARMED, "receive"): "Close your hand to catch",
+    (CATCH_ARMED, "receive"): "Now open your hand to receive",
 }
 
 
@@ -68,6 +69,7 @@ class GestureEngine:
         self._pose_hist: deque[tuple[float, Pose]] = deque()
         self._smoothed = Pose.NONE
         self._pose_since = 0.0
+        self._seen_non_fist = False      # receive: the fist must be formed AFTER the hand was seen open
         self._motion: deque[tuple[float, float, float, float]] = deque()    # t, x, y, palm size
         self._speeds: deque[tuple[float, float, float, float]] = deque()    # t, speed, ux, uy
         self._speed = 0.0
@@ -99,6 +101,8 @@ class GestureEngine:
         self._mode = mode
         self._cooldown_until = 0.0
         self._state = IDLE if self._hand_visible else NO_HAND
+        # a hand that is already a fist when the mode changes must open before it can catch
+        self._seen_non_fist = self._smoothed not in (Pose.FIST, Pose.NONE)
 
     # ------------------------------------------------------------------ main entry point
     def update(self, observations: Sequence[HandObservation], now: float) -> list[GestureEvent]:
@@ -133,6 +137,8 @@ class GestureEngine:
         cx, cy, size = palm_geometry(hand)
         self._last_center, self._last_size, self._last_seen = (cx, cy), size, now
         self._update_pose(self._result.pose, now)
+        if self._smoothed not in (Pose.FIST, Pose.NONE):
+            self._seen_non_fist = True
         self._update_motion(cx, cy, size, now)
         self._step(now, events)
         return events
@@ -219,18 +225,17 @@ class GestureEngine:
                     self._state = IDLE
                     events.append(GestureEvent("drop", now, detail="timeout"))
         else:  # receive
-            if self._state == IDLE:
-                if open_now and stable >= cfg.catch_hold:
-                    self._state, self._ready_deadline = CATCH_ARMED, now + cfg.ready_timeout
+            if self._state == IDLE:                      # 1. close the fist
+                if pose == Pose.FIST and stable >= cfg.grab_time and self._seen_non_fist:
+                    self._state, self._hold_start = CATCH_ARMED, now
                     events.append(GestureEvent("ready", now, detail="catch"))
-            elif self._state == CATCH_ARMED:
-                if open_now:
-                    self._ready_deadline = now + cfg.ready_timeout
-                elif pose == Pose.FIST and stable >= cfg.grab_time:
+            elif self._state == CATCH_ARMED:             # 2. open it again = catch
+                if open_now and stable >= cfg.open_confirm:
                     events.append(GestureEvent("catch", now))
                     self._start_cooldown(now)
-                elif now > self._ready_deadline:
+                elif now - self._hold_start > cfg.hold_timeout:
                     self._state = IDLE
+                    events.append(GestureEvent("cancelled", now, detail="timeout"))
 
     def _release(self, now: float, events: list[GestureEvent]) -> None:
         """The hand opened while holding: was it a throw or a gentle drop?"""
@@ -263,10 +268,15 @@ class GestureEngine:
             progress = 1 - left / self._cooldown_total if self._cooldown_total else 1.0
         elif self._hand is not None and self._mode != "idle":
             if self._state == IDLE:
-                need = cfg.arm_time if self._mode == "send" else cfg.catch_hold
-                progress = min(1.0, stable / need) if now_pose == Pose.OPEN else 0.0
-            elif self._state in (READY, CATCH_ARMED):
+                if self._mode == "send":
+                    progress = min(1.0, stable / cfg.arm_time) if now_pose == Pose.OPEN else 0.0
+                else:      # receive: the fist is the first step
+                    progress = (min(1.0, stable / cfg.grab_time)
+                                if now_pose == Pose.FIST and self._seen_non_fist else 0.0)
+            elif self._state == READY:
                 progress = min(1.0, stable / cfg.grab_time) if now_pose == Pose.FIST else 0.0
+            elif self._state == CATCH_ARMED:       # receive: the release is the second step
+                progress = min(1.0, stable / cfg.open_confirm) if now_pose == Pose.OPEN else 0.0
             elif self._state == HOLDING:
                 progress = min(1.0, self._speed / cfg.throw_speed)
         hint = _HINTS.get((self._state, self._mode), "")

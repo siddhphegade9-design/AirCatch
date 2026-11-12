@@ -5,7 +5,7 @@
 |---|---|---|
 | send | open palm (held) -> fist (held) -> open the hand with a fast flick | `ready` -> `grab` -> `throw` (with direction and speed) |
 | send | same, but the hand opens gently | `drop` (nothing is sent) |
-| receive | open palm (held) -> fist | `ready` -> `catch` (accept) |
+| receive | fist (held) -> open the hand | `ready` -> `catch` (accept). Close your fist, then release it. A fist that is already closed when the offer arrives must open first. |
 | any | tracking only | `idle` mode: poses and feedback, no gesture events |
 
 Every gesture also has a button fallback in the app (Milestone 6).
@@ -22,7 +22,7 @@ The engine knows nothing about cameras, windows or the network. The app picks th
 * **Throw**: the hand's speed is measured in *palm lengths per second*, so it works at any distance from the camera.
   A release counts as a throw if the fastest movement in the `throw_window` before it reached `throw_speed`
   (or always, if `require_motion` is false: the simplest, most reliable variant).
-* **No repeats**: a cooldown follows every throw/catch, and the whole open-fist-open cycle must be repeated.
+* **No repeats**: a cooldown follows every throw/catch, and the whole gesture must be repeated.
 * **Lost hand**: a hand may vanish for `lost_grace` seconds; longer cancels the armed gesture.
 * **Several hands**: the closest one is followed; hands smaller than `min_palm_size` (far away) are ignored.
 * All times are real seconds, so frame rate does not matter.

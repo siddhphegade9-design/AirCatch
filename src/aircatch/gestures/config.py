@@ -23,7 +23,7 @@ class GestureConfig:
     velocity_window: float = 0.12
     arm_time: float = 0.15            # open palm held this long = ready
     grab_time: float = 0.12           # fist held this long = grab / catch
-    catch_hold: float = 0.35          # open palm held this long in receive mode = ready to catch
+    catch_hold: float = 0.35          # no longer used (receive is now fist -> open); kept so old settings files load
     open_confirm: float = 0.06        # open hand held this long after a fist = release
     ready_timeout: float = 1.0        # ready is lost if the palm is not open for this long
     hold_timeout: float = 20.0        # holding a file longer than this drops it

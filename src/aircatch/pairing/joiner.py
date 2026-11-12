@@ -24,7 +24,8 @@ class PairResult:
 
 
 async def pair_with(payload: PairingPayload, identity: DeviceIdentity, trust: TrustStore, *,
-                    connect_timeout: float = 10.0, approval_timeout: float = 330.0) -> PairResult:
+                    connect_timeout: float = 10.0, approval_timeout: float = 330.0,
+                    listen_port: int | None = None) -> PairResult:
     """Pair with the device that produced `payload`. On success both sides trust each other."""
     ctx = build_client_context(identity=None, server_cert_pem=None)
     try:
@@ -47,9 +48,11 @@ async def pair_with(payload: PairingPayload, identity: DeviceIdentity, trust: Tr
             return PairResult(False, "fingerprint_mismatch")
 
         proof = compute_proof(payload.token, host_fp, identity.fingerprint)
-        await send_message(writer, {"type": "pair_request", "version": 1,
-                                    "device_name": identity.name, "cert": identity.cert_pem,
-                                    "proof": proof})
+        request = {"type": "pair_request", "version": 1, "device_name": identity.name,
+                   "cert": identity.cert_pem, "proof": proof}
+        if isinstance(listen_port, int) and not isinstance(listen_port, bool) and 1 <= listen_port <= 65535:
+            request["listen_port"] = listen_port      # optional: lets the host reach us without discovery
+        await send_message(writer, request)
         reply = await read_message(reader, approval_timeout)
         if reply.get("type") == "pair_reject":
             return PairResult(False, str(reply.get("reason", "rejected"))[:50])

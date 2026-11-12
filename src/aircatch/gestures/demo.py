@@ -1,7 +1,7 @@
 """Live gesture test window: camera + hand skeleton + what the engine understands.
 
   python gesture_demo.py                       send mode (open palm -> fist -> flick and open)
-  python gesture_demo.py --mode receive        catch mode (open palm -> fist)
+  python gesture_demo.py --mode receive        catch mode (close your fist, then open it)
   python gesture_demo.py --list-cameras        which camera numbers work (find your phone camera)
   python gesture_demo.py --calibrate           teach it how fast YOUR throws are
   python gesture_demo.py --benchmark 10        speed measurement without a window

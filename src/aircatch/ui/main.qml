@@ -9,7 +9,7 @@ Window {
     width: 1180
     height: 780
     minimumWidth: 980
-    minimumHeight: 660
+    minimumHeight: 720
     visible: true
     title: backend.deviceName ? "AirCatch — " + backend.deviceName : "AirCatch"
     color: "#070b16"
@@ -347,6 +347,13 @@ Window {
                                 NumberAnimation { target: sc; property: "opacity"; to: 1; duration: root.d(240) }
                             }
                         }
+                        SequentialAnimation {
+                            id: scShake
+                            NumberAnimation { target: sc; property: "offX"; to: backend.reducedMotion ? 0 : -12; duration: root.d(60) }
+                            NumberAnimation { target: sc; property: "offX"; to: backend.reducedMotion ? 0 : 12; duration: root.d(90) }
+                            NumberAnimation { target: sc; property: "offX"; to: backend.reducedMotion ? 0 : -8; duration: root.d(80) }
+                            NumberAnimation { target: sc; property: "offX"; to: 0; duration: root.d(70) }
+                        }
                         function onPhase(p) {
                             var was = lastPhase
                             lastPhase = p
@@ -359,6 +366,7 @@ Window {
                                 launch.stop(); zoomOut.stop()
                                 if (was === "holding") { zoomBack.restart() }
                                 else if (opacity < 0.99 || k < 0.99) { popIn.restart() }
+                                else if (p === "failed") { scShake.restart() }
                             }
                         }
                         Connections {
@@ -376,9 +384,10 @@ Window {
                         id: sendChip
                         readonly property bool shown: ["waiting", "sending", "done", "failed"].indexOf(backend.senderPhase) >= 0
                         anchors.horizontalCenter: parent.horizontalCenter
-                        y: shown ? 18 : 6
-                        width: Math.min(parent.width - 40, 420)
-                        height: 62
+                        y: shown ? 50 : 38
+                        width: Math.min(parent.width - 40, 440)
+                        height: backend.senderPhase === "failed" ? 104 : 66
+                        Behavior on height { NumberAnimation { duration: root.d(200) } }
                         radius: 18
                         color: "#0e1a36"
                         border.color: backend.senderPhase === "done" ? root.green
@@ -390,17 +399,20 @@ Window {
                         Text {
                             x: 18; y: 10
                             width: parent.width - 36
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: backend.senderPhase === "failed" ? 4 : 2
                             elide: Text.ElideRight
                             color: backend.senderPhase === "done" ? root.green
                                    : backend.senderPhase === "failed" ? root.red : root.textColor
                             font.pixelSize: 14
                             font.weight: Font.DemiBold
-                            text: backend.senderPhase === "waiting" ? "Waiting for " + backend.selectedDeviceName + " to catch…"
+                            text: backend.senderPhase === "waiting" ? (backend.sendStep !== "" ? backend.sendStep : "Waiting for " + backend.selectedDeviceName + " to catch it...")
                                   : backend.senderPhase === "sending" ? "Sending to " + backend.selectedDeviceName + " · " + Math.round(backend.sendProgress * 100) + "%"
                                   : backend.senderMessage
                         }
                         Rectangle {
-                            x: 18; y: 40
+                            x: 18
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: 12
                             width: parent.width - 36; height: 6; radius: 3
                             color: "#16264a"
                             Rectangle {
@@ -422,6 +434,26 @@ Window {
                         color: "#cc07101f"
                         border.color: "#25406e"
                         Text { id: hintText; anchors.centerIn: parent; text: backend.gestureHint; color: "#cfe3ff"; font.pixelSize: 12 }
+                    }
+                    Rectangle {
+                        visible: backend.cameraActive && backend.lastGesture !== ""
+                        anchors.left: parent.left; anchors.top: parent.top
+                        anchors.margins: 12
+                        height: 28; radius: 14
+                        width: Math.min(parent.width - 190, lastText.implicitWidth + 26)
+                        color: "#cc07101f"
+                        border.color: backend.lastGesture.indexOf("NOT SENT") === 0 ? root.red : "#25406e"
+                        Text {
+                            id: lastText
+                            anchors.centerIn: parent
+                            width: parent.width - 20
+                            elide: Text.ElideRight
+                            horizontalAlignment: Text.AlignHCenter
+                            text: backend.lastGesture
+                            color: backend.lastGesture.indexOf("NOT SENT") === 0 ? root.red : root.textColor
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
                     }
                     Rectangle {
                         visible: backend.cameraActive
@@ -457,9 +489,22 @@ Window {
                     Btn { label: "RECEIVE"; primary: backend.mode === "receive"; onClicked: backend.setReceiveMode() }
                     Item { Layout.fillWidth: true }
                     Text {
-                        text: backend.mode === "send" ? "Palm → fist → flick & open" : "Palm → close your hand to catch"
-                        color: root.mutedColor
+                        text: "Easy throw"
+                        color: backend.easyThrow ? root.cyan : root.mutedColor
                         font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: backend.toggleEasyThrow() }
+                    }
+                    Rectangle {
+                        width: 34; height: 18; radius: 9
+                        color: backend.easyThrow ? "#0e5f73" : "#16264a"
+                        Rectangle {
+                            width: 14; height: 14; radius: 7; y: 2
+                            x: backend.easyThrow ? 18 : 2
+                            color: backend.easyThrow ? root.cyan : "#7f8fb8"
+                            Behavior on x { NumberAnimation { duration: 120 } }
+                        }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: backend.toggleEasyThrow() }
                     }
                 }
             }
@@ -473,13 +518,13 @@ Window {
 
                 Card {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 232
+                    Layout.preferredHeight: 262
                     title: "DEVICES"
                     ListView {
                         id: deviceList
                         x: 12; y: 0
                         width: parent.width - 24
-                        height: 118
+                        height: 98
                         clip: true
                         spacing: 6
                         model: backend.devices
@@ -535,7 +580,7 @@ Window {
                         }
                     }
                     TextField {
-                        x: 12; y: 128
+                        x: 12; y: 106
                         width: parent.width - 24; height: 34
                         placeholderText: "Address if not found, e.g. 192.168.1.23:5001"
                         placeholderTextColor: "#51628d"
@@ -546,11 +591,30 @@ Window {
                         background: Rectangle { radius: 10; color: "#0a1226"; border.color: "#1d2d55" }
                         onTextChanged: backend.setManualAddress(text)
                     }
+                    Btn {
+                        x: 12; y: 148
+                        label: backend.testingConnection ? "Testing…" : "Test connection"
+                        primary: false
+                        active: !backend.testingConnection
+                        implicitHeight: 30
+                        onClicked: backend.testConnection()
+                    }
+                    Text {
+                        x: 150; y: 146
+                        width: parent.width - 162
+                        height: 44
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 3
+                        elide: Text.ElideRight
+                        text: backend.connectionNote
+                        color: backend.connectionOk ? root.green : backend.testingConnection ? root.mutedColor : root.red
+                        font.pixelSize: 11
+                    }
                 }
 
                 Card {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 170
+                    Layout.preferredHeight: 156
                     title: "FILE"
                     Row {
                         x: 16; y: 2
@@ -607,7 +671,7 @@ Window {
 
                 Card {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 92
+                    Layout.preferredHeight: 84
                     title: "TRANSFER"
                     Text {
                         x: 18; y: -4
@@ -662,6 +726,14 @@ Window {
                             text: "Your activity will appear here"
                             color: "#51628d"; font.pixelSize: 12
                         }
+                    }
+                    Text {
+                        anchors.right: parent.right; anchors.rightMargin: 16
+                        y: -28
+                        text: "Open log folder"
+                        color: root.mutedColor
+                        font.pixelSize: 11
+                        MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: backend.openLogFolder() }
                     }
                     Row {
                         anchors.right: parent.right; anchors.rightMargin: 16
@@ -809,7 +881,7 @@ Window {
                     elide: Text.ElideRight
                     font.pixelSize: 12
                     color: ic.phase === "failed" ? root.red : ic.phase === "arrived" ? root.green : root.cyan
-                    text: ic.phase === "offered" ? (backend.cameraActive ? "Close your hand to catch it" : "Press Catch to accept")
+                    text: ic.phase === "offered" ? (backend.cameraActive ? (backend.gestureState === "CATCH ARMED" ? "Now open your hand to receive" : "Close your fist, then open it to receive") : "Press Catch to accept")
                           : ic.phase === "receiving" ? "Receiving…"
                           : ic.phase === "verifying" ? "Checking the file arrived intact…"
                           : ic.phase === "arrived" ? "Saved: " + backend.receivedName

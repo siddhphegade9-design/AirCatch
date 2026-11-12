@@ -8,15 +8,17 @@ Two instances on one PC (for testing) need separate identities, folders and port
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QtMsgType, QUrl, qInstallMessageHandler
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from aircatch.logsetup import setup_logging
 from aircatch.ui.controller import (AppController, AppSettings, ImageProvider, ThumbProvider,
                                     default_config_dir)
 
@@ -50,6 +52,14 @@ def parse_settings(argv: list[str]) -> tuple[AppSettings, list[str]]:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     settings, qt_args = parse_settings(argv[1:])
+    setup_logging(settings.config_dir)
+    qt_log = logging.getLogger("aircatch.qt")
+
+    def route_qt_messages(mode, context, message):
+        """Qt and QML warnings and errors go to the log file (routine notes are dropped)."""
+        if mode in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            qt_log.warning("%s", message)
+    qInstallMessageHandler(route_qt_messages)
     app = QGuiApplication([argv[0], *qt_args])
     app.setApplicationName("AirCatch")
     app.setOrganizationName("AirCatch")

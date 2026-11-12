@@ -68,22 +68,45 @@ def test_throw_without_a_file_sends_nothing_and_plays_no_flight(ctl):
     assert "file" in ctl.toast.lower()
 
 
-def test_throw_without_a_selected_device_sends_nothing(ctl, tmp_path):
+def test_throw_without_a_selected_device_sends_nothing_and_says_why_on_the_card(ctl, tmp_path):
     give_file(ctl, tmp_path)
     throw(ctl)
-    assert ctl._service.sent() == [] and ctl.senderPhase == "idle"
-    assert "pair" in ctl.toast.lower()
+    assert ctl._service.sent() == []
+    assert ctl.senderPhase == "failed" and "pair" in ctl.senderMessage.lower()   # red flash + message
+    ctl._phase_timeout()
+    assert ctl.senderPhase == "idle"
 
 
-def test_throw_to_an_unreachable_device_is_blocked_unless_an_address_is_given(ctl, tmp_path):
+def test_a_device_shown_offline_is_still_tried(ctl, tmp_path):
+    """Discovery can be wrong or slow. The attempt either works or fails visibly with a reason."""
     give_file(ctl, tmp_path)
-    devices(ctl, {**DEVICE, "online": False, "status": "OFFLINE"})
-    throw(ctl)
-    assert ctl._service.sent() == [] and ctl.senderPhase == "idle"
-    ctl.setManualAddress("192.168.1.23:5001")
+    devices(ctl, {**DEVICE, "online": False, "status": "OFFLINE", "address": ""})
     throw(ctl)
     assert len(ctl._service.sent()) == 1 and ctl.senderPhase == "launched"
-    assert ctl._service.sent()[0][4] == "192.168.1.23:5001"
+    assert ctl._service.sent()[0][4] == ""
+    ctl._on_net("send_step", {"text": "Looking for Laptop-B on the network..."})
+    assert ctl.sendStep == "Looking for Laptop-B on the network..."
+    ctl._on_net("send_result", {"ok": False, "reason": "not_found", "text": "Could not find that device.",
+                                "filename": "note.txt"})
+    assert ctl.senderPhase == "failed" and "find" in ctl.senderMessage.lower()
+    ctl._phase_timeout()
+    ctl.setManualAddress("192.168.1.23:5001")
+    throw(ctl)
+    assert len(ctl._service.sent()) == 2 and ctl._service.sent()[1][4] == "192.168.1.23:5001"
+
+
+def test_live_send_steps_tell_the_sender_what_is_happening(ctl, tmp_path):
+    give_file(ctl, tmp_path)
+    devices(ctl, DEVICE)
+    throw(ctl)
+    assert ctl.sendStep == "Looking for Laptop-B..."
+    ctl._on_net("send_step", {"text": "Connecting to Laptop-B at 192.168.1.23..."})
+    assert "Connecting" in ctl.sendStep
+    ctl._on_net("transfer", tev("offer", "send", total=10))              # connected, offer delivered
+    assert ctl.sendStep == "Waiting for Laptop-B to catch it..."
+    ctl._on_net("transfer", tev("accepted", "send", total=10))
+    ctl._on_net("send_step", {"text": "stale"})
+    assert ctl.sendStep == "Waiting for Laptop-B to catch it..."
 
 
 def test_throw_in_receive_mode_does_nothing(ctl, tmp_path):
@@ -193,6 +216,8 @@ def test_a_throw_that_cannot_start_releases_the_held_card(ctl, tmp_path):
     give_file(ctl, tmp_path)                                   # no device
     gesture(ctl, "grab")
     throw(ctl)
+    assert ctl.senderPhase == "failed"                         # the held card returns, flashing red
+    ctl._phase_timeout()
     assert ctl.senderPhase == "idle"
 
 
@@ -241,7 +266,7 @@ def test_decline_button(ctl):
 def test_catch_with_nothing_incoming_is_harmless(ctl):
     gesture(ctl, "catch")
     assert ctl._service.answers() == [] and ctl.receivePhase == "none"
-    assert "nothing" in ctl.toast.lower()
+    assert "nothing to catch" in ctl.toast.lower()
 
 
 def test_second_offer_is_declined_while_busy(ctl):
@@ -446,3 +471,58 @@ def test_shutdown_is_repeatable_and_stops_everything(qapp, tmp_path):
     c._on_net("offer", {"transfer_id": "x", "sender": "s", "filename": "f", "size": 1,
                         "thumbnail": b"", "verified": True})        # ignored after shutdown
     assert c.receivePhase == "none"
+
+
+# ------------------------------------------------------------------ feedback, easy throw, connection test
+def test_every_gesture_is_reported_on_screen(ctl, tmp_path):
+    ctl._on_gestures([GestureEvent("ready", 1.0, detail="catch")])
+    assert "open your hand" in ctl.lastGesture.lower()
+    give_file(ctl, tmp_path)
+    devices(ctl, DEVICE)
+    gesture(ctl, "grab")
+    assert ctl.lastGesture == "GRAB"
+    throw(ctl, (1.0, 0.0))
+    assert ctl.lastGesture.startswith("THROW") and "12.0" in ctl.lastGesture
+
+
+def test_a_too_gentle_release_explains_itself_with_the_numbers(ctl, tmp_path):
+    give_file(ctl, tmp_path)
+    devices(ctl, DEVICE)
+    ctl._throw_speed = 7.5
+    gesture(ctl, "grab")
+    ctl._on_gestures([GestureEvent("drop", 2.0, speed=3.2, detail="released")])
+    assert ctl.senderPhase == "idle" and ctl._service.sent() == []
+    assert "3.2" in ctl.lastGesture and "7.5" in ctl.lastGesture and "Easy throw" in ctl.lastGesture
+    assert "too gently" in ctl.toast
+    gesture(ctl, "grab")
+    ctl._on_gestures([GestureEvent("drop", 3.0, detail="timeout")])
+    assert "too long" in ctl.lastGesture
+
+
+def test_easy_throw_is_on_by_default_reaches_the_camera_and_is_remembered(qapp, tmp_path):
+    first = make_controller(qapp, tmp_path)
+    assert first.easyThrow
+    first.toggleCamera()
+    assert first._worker.require_motion is False               # any release after a grab sends
+    first.toggleEasyThrow()
+    assert not first.easyThrow and first._worker.require_motion is True
+    first.shutdown()
+    second = make_controller(qapp, tmp_path)
+    assert not second.easyThrow                                 # remembered
+    second.toggleCamera()
+    assert second._worker.require_motion is True
+    second.shutdown()
+
+
+def test_test_connection_asks_the_service_and_shows_the_answer(ctl):
+    ctl.testConnection()
+    assert "paired device" in ctl.connectionNote.lower() and not ctl.testingConnection
+    devices(ctl, DEVICE)
+    ctl.setManualAddress("10.0.0.5:5001")
+    ctl.testConnection()
+    assert ctl.testingConnection
+    assert ("test_connection", DEVICE["device_id"], "10.0.0.5:5001") in ctl._service.calls
+    ctl._on_net("connection_result", {"ok": True, "text": "Connected to Laptop-B at 10.0.0.5:5001."})
+    assert ctl.connectionOk and not ctl.testingConnection and "Connected" in ctl.connectionNote
+    ctl._on_net("connection_result", {"ok": False, "text": "Could not connect."})
+    assert not ctl.connectionOk
