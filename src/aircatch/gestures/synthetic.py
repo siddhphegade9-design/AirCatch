@@ -33,7 +33,10 @@ _ORDER = ("thumb", "index", "middle", "ring", "pinky")
 _POSES = {  # which of (index, middle, ring, pinky) are stretched
     "open": (1, 1, 1, 1), "fist": (0, 0, 0, 0), "point": (1, 0, 0, 0),
     "victory": (1, 1, 0, 0), "three": (1, 1, 1, 0), "rock": (1, 0, 0, 1),
+    "pinch": (0, 1, 1, 1),     # index bent down to meet the thumb, other three straight
 }
+# thumb reaching round to touch the bent index fingertip (see "pinch")
+_PINCH_THUMB = [(0.20, -0.30), (0.50, -0.50), (0.85, -0.52), (1.20, -0.36)]
 
 
 def _mix(a, b, t):
@@ -58,6 +61,8 @@ def make_hand(pose: str = "open", *, center: tuple[float, float] = (0.5, 0.5),
     if curl is None:
         flags = _POSES[pose]
         curl = [0.0 if f else 1.0 for f in flags]
+        if pose == "pinch":
+            curl[0] = 0.55
     rng = rng or random.Random(0)
     local: list[tuple[float, float]] = []
     for name in _ORDER:
@@ -66,6 +71,8 @@ def make_hand(pose: str = "open", *, center: tuple[float, float] = (0.5, 0.5),
         else:
             t = curl[_ORDER.index(name) - 1]
         pts = [_mix(o, c, t) for o, c in zip(_OPEN[name], _CURLED[name])]
+        if name == "thumb" and pose == "pinch":
+            pts = list(_PINCH_THUMB)
         local.extend(pts)
     local.insert(0, (0.0, 0.0))                                   # wrist
     # shift so the palm centre (wrist + 4 knuckles) sits at the origin
@@ -134,10 +141,10 @@ def render(segments: Sequence[Seg], fps: float = 30.0, t0: float = 100.0, *, noi
 
 
 def run(engine: GestureEngine, segments: Sequence[Seg], fps: float = 30.0, *, noise: float = 0.0,
-        seed: int = 1) -> list[GestureEvent]:
+        seed: int = 1, t0: float = 100.0) -> list[GestureEvent]:
     """Play a scripted movie through the engine and return every event that came out."""
     events: list[GestureEvent] = []
-    for t, hands in render(segments, fps, noise=noise, seed=seed):
+    for t, hands in render(segments, fps, t0, noise=noise, seed=seed):
         events.extend(engine.update(hands, t))
     return events
 

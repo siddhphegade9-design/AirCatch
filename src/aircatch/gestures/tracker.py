@@ -13,7 +13,7 @@ class TrackerError(RuntimeError):
 @dataclass
 class TrackerConfig:
     max_hands: int = 2
-    model_complexity: int = 0              # 0 = fastest, 1 = more accurate
+    model_complexity: int = 1              # 0 = fastest, 1 = more accurate (better with turned hands)
     min_detection_confidence: float = 0.6
     min_tracking_confidence: float = 0.5
 

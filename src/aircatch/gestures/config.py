@@ -29,20 +29,42 @@ class GestureConfig:
     hold_timeout: float = 20.0        # holding a file longer than this drops it
     lost_grace: float = 0.5           # a hand may vanish this long (blur, glitch) without cancelling
     cooldown: float = 1.5             # quiet time after a throw or catch
+    # --- browsing the file explorer (peace sign opens/closes, swipes move, pinch selects) ---
+    browse_hold: float = 0.5          # peace sign held this long opens / closes the explorer
+    browse_block: float = 0.8         # quiet time after opening / closing
+    swipe_speed: float = 3.0          # palm-lengths per second a swipe must reach
+    swipe_travel: float = 1.0         # palm-lengths the hand must cover
+    swipe_window: float = 0.3         # the travel must happen within this time
+    swipe_axis_share: float = 0.75    # how straight the swipe must be (share along its main axis)
+    swipe_repeat: float = 0.45        # wait before another swipe the same way
+    swipe_opposite_block: float = 1.0 # wait before a swipe the opposite way (the hand coming back)
+    pinch_on: float = 0.45            # thumb-to-index gap / palm length below this = pinching
+    pinch_off: float = 0.70           # above this = released (between the two keeps the old answer)
+    pinch_straight_fingers: int = 3   # middle, ring, pinky that must stay straight during a pinch
+    pinch_hold: float = 0.3           # pinch held this long = select
     # --- the throw ---
     throw_window: float = 0.4         # look this far back from the release for the fastest movement
     throw_speed: float = 6.0          # palm-lengths per second needed to count as a throw
     require_motion: bool = True       # False: any release after a grab counts (simplest gesture)
+    # --- camera ---
+    smooth_landmarks: bool = True     # steady the 21 hand points (less jitter, same speed)
 
     def validate(self) -> None:
         positive = ("min_palm_size", "pose_window", "velocity_window", "arm_time", "grab_time",
                     "catch_hold", "open_confirm", "ready_timeout", "hold_timeout", "lost_grace",
-                    "throw_window", "throw_speed")
+                    "throw_window", "throw_speed", "browse_hold", "swipe_speed", "swipe_travel",
+                    "swipe_window", "pinch_on", "pinch_hold")
         for name in positive:
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be greater than 0")
-        if self.cooldown < 0:
-            raise ValueError("cooldown cannot be negative")
+        if self.cooldown < 0 or self.browse_block < 0 or self.swipe_repeat < 0 or self.swipe_opposite_block < 0:
+            raise ValueError("cooldown and block times cannot be negative")
+        if not 0 < self.pinch_on < self.pinch_off:
+            raise ValueError("pinch_on must be above 0 and below pinch_off")
+        if not 1 <= self.pinch_straight_fingers <= 3:
+            raise ValueError("pinch_straight_fingers must be between 1 and 3")
+        if not 0.5 < self.swipe_axis_share <= 1:
+            raise ValueError("swipe_axis_share must be above 0.5 and at most 1")
         if not 0 < self.curled_ratio < self.extended_ratio:
             raise ValueError("curled_ratio must be above 0 and below extended_ratio")
         if not 1 <= self.open_min_fingers <= 4 or not 1 <= self.fist_min_curled <= 4:

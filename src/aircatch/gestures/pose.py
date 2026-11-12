@@ -5,8 +5,8 @@ import math
 from dataclasses import dataclass
 
 from aircatch.gestures.config import GestureConfig
-from aircatch.gestures.types import (FINGERS, INDEX_MCP, MIDDLE_MCP, PALM_POINTS, PINKY_MCP,
-                                     THUMB_TIP, WRIST, HandObservation, Point, Pose)
+from aircatch.gestures.types import (FINGERS, INDEX_MCP, INDEX_TIP, MIDDLE_MCP, PALM_POINTS,
+                                     PINKY_MCP, THUMB_TIP, WRIST, HandObservation, Point, Pose)
 
 
 def _dist(a: Point, b: Point) -> float:
@@ -23,14 +23,21 @@ def _shape_points(hand: HandObservation) -> list[Point]:
 
 
 def palm_geometry(hand: HandObservation) -> tuple[float, float, float]:
-    """(centre x, centre y, palm length) in image-height units, from the image landmarks."""
+    """(centre x, centre y, hand scale) in image-height units, from the image landmarks.
+
+    The scale is the palm length, but a hand turned edge-on (or pointing at the camera) squashes
+    one of the palm's two directions. So the scale is the larger of the palm length and the
+    knuckle-row width (scaled to palm-length units): it stays stable however the hand is turned,
+    which keeps swipe speeds and the 'hand too small' test honest."""
     a = hand.aspect
     pts = [hand.landmarks[i] for i in PALM_POINTS]
     cx = sum(p[0] for p in pts) / len(pts) * a
     cy = sum(p[1] for p in pts) / len(pts)
     w, m = hand.landmarks[WRIST], hand.landmarks[MIDDLE_MCP]
-    size = math.hypot((w[0] - m[0]) * a, w[1] - m[1])
-    return cx, cy, size
+    length = math.hypot((w[0] - m[0]) * a, w[1] - m[1])
+    i, k = hand.landmarks[INDEX_MCP], hand.landmarks[PINKY_MCP]
+    width = math.hypot((i[0] - k[0]) * a, i[1] - k[1])
+    return cx, cy, max(length, 1.35 * width)
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,8 @@ class PoseResult:
     fingers: tuple[bool, bool, bool, bool]   # stretched? index, middle, ring, pinky
     ratios: tuple[float, float, float, float]
     thumb_out: bool
+    pinch: bool = False       # thumb tip touching index tip, middle/ring/pinky straight
+    victory: bool = False     # index and middle stretched, ring and pinky curled (peace sign)
 
 
 class PoseClassifier:
@@ -52,9 +61,11 @@ class PoseClassifier:
     def __init__(self, config: GestureConfig) -> None:
         self._cfg = config
         self._state: dict[str, bool] = {}
+        self._pinching = False
 
     def reset(self) -> None:
         self._state.clear()
+        self._pinching = False
 
     def classify(self, hand: HandObservation) -> PoseResult:
         pts = _shape_points(hand)
@@ -81,4 +92,15 @@ class PoseClassifier:
             pose = Pose.OTHER
         palm = _dist(pts[MIDDLE_MCP], wrist)
         thumb_out = palm > 1e-9 and _dist(pts[THUMB_TIP], pts[PINKY_MCP]) / palm > 0.9
-        return PoseResult(pose, tuple(flags), tuple(ratios), thumb_out)
+        # pinch: measured in 3D (turning-proof), as a fraction of the palm length, with hysteresis
+        pinch_gap = _dist(pts[THUMB_TIP], pts[INDEX_TIP]) / palm if palm > 1e-9 else 9.0
+        straight = sum(flags[1:])                       # middle, ring, pinky
+        if straight >= self._cfg.pinch_straight_fingers:
+            if pinch_gap <= self._cfg.pinch_on:
+                self._pinching = True
+            elif pinch_gap >= self._cfg.pinch_off:
+                self._pinching = False
+        else:
+            self._pinching = False
+        victory = flags[0] and flags[1] and not flags[2] and not flags[3]
+        return PoseResult(pose, tuple(flags), tuple(ratios), thumb_out, self._pinching, victory)

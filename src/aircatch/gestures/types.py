@@ -18,8 +18,8 @@ FINGERS = (("index", INDEX_MCP, INDEX_TIP), ("middle", MIDDLE_MCP, MIDDLE_TIP),
            ("ring", RING_MCP, RING_TIP), ("pinky", PINKY_MCP, PINKY_TIP))
 PALM_POINTS = (WRIST, INDEX_MCP, MIDDLE_MCP, RING_MCP, PINKY_MCP)
 
-Mode = Literal["idle", "send", "receive"]
-MODES: tuple[str, ...] = ("idle", "send", "receive")
+Mode = Literal["idle", "send", "receive", "browse"]
+MODES: tuple[str, ...] = ("idle", "send", "receive", "browse")
 
 Point = tuple[float, float, float]
 
@@ -62,6 +62,10 @@ EventKind = Literal[
     "throw",        # (send mode) hand opened with a fast flick: SEND
     "catch",        # (receive mode) open palm closed into a fist: ACCEPT
     "cancelled",    # an armed gesture was abandoned (for example the hand left the view)
+    "browse_open",  # peace sign held in send mode: open the file explorer
+    "browse_close", # peace sign held while browsing: close it
+    "swipe",        # (browse) quick hand movement; detail = up / down / left / right
+    "pinch",        # (browse) thumb and index pinched and held: SELECT
 ]
 
 
@@ -88,3 +92,4 @@ class EngineStatus:
     palm_center: tuple[float, float] | None  # normalised image position
     hint: str
     hand: HandObservation | None = None
+    pinch: bool = False                      # is the hand pinching right now?

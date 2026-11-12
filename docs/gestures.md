@@ -8,7 +8,21 @@
 | receive | fist (held) -> open the hand | `ready` -> `catch` (accept). Close your fist, then release it. A fist that is already closed when the offer arrives must open first. |
 | any | tracking only | `idle` mode: poses and feedback, no gesture events |
 
-Every gesture also has a button fallback in the app (Milestone 6).
+| send | peace sign (index + middle up) held 0.5 s | `browse_open`: the file explorer opens (never while a file is in hand) |
+| browse | quick open-palm swipe up / down / left / right | `swipe` with `detail` = direction. Up/down move the highlight, right opens a folder, left goes back |
+| browse | pinch (thumb tip + index tip touching, middle/ring/pinky straight) held 0.3 s | `pinch`: select. Opens a folder, or picks a file, closes the explorer and returns to send mode |
+| browse | peace sign held 0.5 s | `browse_close` |
+
+Every gesture also has a button fallback in the app (Milestone 6). The explorer has a **Browse** button and its rows can be clicked.
+
+### Hand turned sideways, or fingertips pointing at the camera
+* Open/fist, pinch and peace sign are judged from MediaPipe's 3D hand points, which do not change much when the hand turns.
+  Tests cover hands turned up to about 70 degrees both ways.
+* Swipe speed is measured against a hand scale that stays stable when the palm is edge-on or foreshortened.
+* After a swipe, the hand moving back is ignored (the opposite direction is blocked for 1 s, the same direction for 0.45 s).
+* A hand exactly edge-on (90 degrees) is the weak spot: the fingers hide each other and MediaPipe has to guess depth.
+  A hand turned about 45-60 degrees is much steadier.
+* The 21 hand points are smoothed (`smooth_landmarks`) and MediaPipe runs its more accurate model (`model_complexity = 1`).
 
 ## How it works
 camera picture -> `HandTracker` (MediaPipe: 21 landmarks per hand) -> `GestureEngine` (pose + state machine) -> events.

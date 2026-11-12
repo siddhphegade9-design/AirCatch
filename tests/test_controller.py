@@ -165,7 +165,9 @@ def test_sender_phases_follow_real_transfer_events(ctl, tmp_path):
     assert ctl.senderPhase == "done"
     assert ctl.history[0]["title"] == "Sent"
     ctl._phase_timeout()
-    assert ctl.senderPhase == "idle" and ctl.hasFile and ctl.canSend
+    # delivered: the card and thumbnail go away so a fresh file can be chosen
+    assert ctl.senderPhase == "idle" and not ctl.hasFile and not ctl.hasThumb and ctl.fileName == ""
+    assert not ctl.canSend
 
 
 def test_failed_send_returns_the_card_and_explains_why(ctl, tmp_path):
@@ -526,3 +528,83 @@ def test_test_connection_asks_the_service_and_shows_the_answer(ctl):
     assert ctl.connectionOk and not ctl.testingConnection and "Connected" in ctl.connectionNote
     ctl._on_net("connection_result", {"ok": False, "text": "Could not connect."})
     assert not ctl.connectionOk
+
+
+# ------------------------------------------------------------------ the gesture file explorer
+def browse_tree(ctl, tmp_path):
+    from aircatch.ui.filebrowser import Entry, FileBrowser
+    (tmp_path / "Desk" / "Sub").mkdir(parents=True)
+    (tmp_path / "Desk" / "a.txt").write_text("a")
+    (tmp_path / "Desk" / "b.txt").write_text("b")
+    ctl._browser = FileBrowser([Entry("Desk", tmp_path / "Desk", True, "Folder")])
+
+
+def ev(kind, **kw):
+    return GestureEvent(kind, 1.0, **kw)
+
+
+def test_peace_sign_opens_the_explorer_and_swipes_move_pinch_picks_the_file(ctl, tmp_path):
+    browse_tree(ctl, tmp_path)
+    ctl.toggleCamera()                                                # the fake camera worker
+    ctl._on_gestures([ev("browse_open")])
+    assert ctl.browsing and ctl.browserTitle == "This computer" and ctl.browserCount == 1
+    ctl._on_gestures([ev("pinch")])                                   # Desk
+    assert ctl.browserTitle.endswith("Desk") and ctl.browserCount == 3        # Sub, a.txt, b.txt
+    ctl._on_gestures([ev("swipe", detail="down")])
+    ctl._on_gestures([ev("swipe", detail="down")])
+    assert ctl.browserIndex == 2
+    ctl._on_gestures([ev("swipe", detail="up")])
+    assert ctl.browserIndex == 1
+    ctl._on_gestures([ev("pinch")])                                   # a.txt
+    assert not ctl.browsing and ctl.hasFile and ctl.fileName == "a.txt"
+    assert ctl._worker.mode == "send"                                 # back to the normal throw gestures
+
+
+def test_swipe_right_enters_a_folder_and_left_goes_back(ctl, tmp_path):
+    browse_tree(ctl, tmp_path)
+    ctl.toggleCamera()
+    ctl.openBrowser()
+    assert ctl._worker.mode == "browse"
+    ctl._on_gestures([ev("swipe", detail="right")])
+    assert ctl.browserTitle.endswith("Desk")
+    ctl._on_gestures([ev("swipe", detail="right")])                   # Sub (a folder)
+    assert ctl.browserTitle.endswith("Sub")
+    ctl._on_gestures([ev("swipe", detail="left")])
+    assert ctl.browserTitle.endswith("Desk")
+    ctl._on_gestures([ev("swipe", detail="left")])
+    assert ctl.browserTitle == "This computer"
+    ctl._on_gestures([ev("swipe", detail="left")])                    # nowhere further
+    assert ctl.browsing and "top" in ctl.toast.lower()
+
+
+def test_peace_sign_closes_it_and_gestures_outside_the_explorer_are_ignored(ctl, tmp_path):
+    browse_tree(ctl, tmp_path)
+    ctl._on_gestures([ev("swipe", detail="down"), ev("pinch")])      # explorer closed: nothing happens
+    assert not ctl.browsing and not ctl.hasFile
+    ctl._on_gestures([ev("browse_open")])
+    ctl._on_gestures([ev("browse_close")])
+    assert not ctl.browsing
+
+
+def test_explorer_refuses_to_open_while_sending_or_receiving(ctl, tmp_path):
+    give_file(ctl, tmp_path)
+    devices(ctl, DEVICE)
+    throw(ctl)                                                        # now busy
+    ctl.openBrowser()
+    assert not ctl.browsing and "current send" in ctl.toast.lower()
+
+
+def test_an_incoming_file_closes_the_explorer(ctl, tmp_path):
+    browse_tree(ctl, tmp_path)
+    ctl.openBrowser()
+    ctl._on_net("offer", {"transfer_id": "t9", "sender": "Laptop-B", "filename": "x.txt", "size": 3,
+                          "thumbnail": b"", "verified": True})
+    assert not ctl.browsing and ctl.receivePhase == "offered"
+
+
+def test_clicking_a_row_works_like_a_pinch(ctl, tmp_path):
+    browse_tree(ctl, tmp_path)
+    ctl.openBrowser()
+    ctl.browserActivate(0)                                            # Desk
+    ctl.browserActivate(2)                                            # b.txt
+    assert ctl.fileName == "b.txt" and not ctl.browsing

@@ -15,7 +15,7 @@ class FakeService:
     def open_pairing(self): self.calls.append(("open_pairing",)); return self.pairing_uri
     def close_pairing(self): self.calls.append(("close_pairing",))
     def answer_pairing(self, ok): self.calls.append(("answer_pairing", ok))
-    def answer_offer(self, tid, ok): self.calls.append(("answer_offer", tid, ok))
+    def answer_offer(self, tid, ok, reason=""): self.calls.append(("answer_offer", tid, ok))
     def join_pairing(self, text): self.calls.append(("join", text))
     def send(self, device_id, path, thumb, manual): self.calls.append(("send", device_id, path, thumb, manual))
     def cancel_send(self): self.calls.append(("cancel_send",))

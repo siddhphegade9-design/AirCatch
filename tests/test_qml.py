@@ -121,3 +121,22 @@ def test_every_state_renders_without_qml_errors(ui, qapp):
     ctl._on_net("pairing_request", {"name": "Laptop-B", "address": "1.2.3.4", "device_id": "x"})
     pump(qapp, 0.4)
     assert [m for m in messages if m.strip()] == []
+
+
+def test_explorer_overlay_renders_and_reacts(ui, qapp, tmp_path):
+    engine, ctl, messages, tmp = ui
+    from aircatch.ui.filebrowser import Entry, FileBrowser
+    (tmp / "D" / "Sub").mkdir(parents=True)
+    (tmp / "D" / "one.txt").write_text("1")
+    ctl._browser = FileBrowser([Entry("D", tmp / "D", True, "Folder")])
+    ctl.openBrowser()
+    pump(qapp, 0.3)
+    assert ctl.browsing and ctl.browserCount == 1
+    ctl.browserSelect()
+    pump(qapp, 0.2)
+    ctl.browserMove(1)
+    ctl.browserSelect()                                                   # picks one.txt, closes
+    pump(qapp, 0.3)
+    assert not ctl.browsing and ctl.fileName == "one.txt"
+    errors = [m for m in messages if m.strip() and "QFontDatabase" not in m]
+    assert errors == []

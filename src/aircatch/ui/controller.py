@@ -26,6 +26,7 @@ from PySide6.QtQuick import QQuickImageProvider
 
 from aircatch.gestures.config import GestureConfig
 from aircatch.service import NetworkService, reason_text
+from aircatch.ui.filebrowser import FileBrowser
 from aircatch.ui.thumbnails import (decode_incoming_preview, file_kind, human_size, jpeg_for_offer,
                                     load_preview)
 from aircatch.ui.vision_worker import VisionWorker
@@ -138,6 +139,37 @@ class DeviceModel(QAbstractListModel):
         self.endResetModel()
 
 
+class BrowserModel(QAbstractListModel):
+    """The rows of the gesture file explorer."""
+    NameRole = Qt.ItemDataRole.UserRole + 1
+    IsDirRole = Qt.ItemDataRole.UserRole + 2
+    DetailRole = Qt.ItemDataRole.UserRole + 3
+    BadgeRole = Qt.ItemDataRole.UserRole + 4
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.items: list = []
+
+    def roleNames(self):
+        return {self.NameRole: b"name", self.IsDirRole: b"isDir", self.DetailRole: b"detail",
+                self.BadgeRole: b"badge"}
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self.items)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self.items):
+            return None
+        e = self.items[index.row()]
+        return {self.NameRole: e.name, self.IsDirRole: e.is_dir, self.DetailRole: e.detail,
+                self.BadgeRole: e.badge}.get(role)
+
+    def replace(self, items: list) -> None:
+        self.beginResetModel()
+        self.items = list(items)
+        self.endResetModel()
+
+
 _DEFAULTS: dict = {
     "status": "Starting AirCatch…", "deviceName": "", "networkReady": False, "downloadDir": "",
     "cameraActive": False, "cameraStarting": False, "frameCounter": 0, "mode": "send",
@@ -156,6 +188,7 @@ _DEFAULTS: dict = {
     "history": [], "reducedMotion": False, "pairingUri": "", "qrVersion": 0,
     "easyThrow": True, "lastGesture": "", "sendStep": "",
     "connectionNote": "", "connectionOk": False, "testingConnection": False,
+    "browsing": False, "browserTitle": "", "browserIndex": 0, "browserNote": "", "browserCount": 0,
 }
 
 
@@ -181,6 +214,8 @@ class AppController(QObject):
     pairingUriChanged = Signal(); qrVersionChanged = Signal()
     easyThrowChanged = Signal(); lastGestureChanged = Signal(); sendStepChanged = Signal()
     connectionNoteChanged = Signal(); connectionOkChanged = Signal(); testingConnectionChanged = Signal()
+    browsingChanged = Signal(); browserTitleChanged = Signal(); browserIndexChanged = Signal()
+    browserNoteChanged = Signal(); browserCountChanged = Signal()
     # events (not state)
     toastChanged = Signal()
     pairingRequest = Signal(str, str)
@@ -248,6 +283,12 @@ class AppController(QObject):
                                  notify=testingConnectionChanged)
     toast = Property(str, lambda s: s._toast_text, notify=toastChanged)
     devices = Property(QObject, lambda s: s._devices, constant=True)
+    browsing = Property(bool, lambda s: s._v["browsing"], notify=browsingChanged)
+    browserTitle = Property(str, lambda s: s._v["browserTitle"], notify=browserTitleChanged)
+    browserIndex = Property(int, lambda s: s._v["browserIndex"], notify=browserIndexChanged)
+    browserNote = Property(str, lambda s: s._v["browserNote"], notify=browserNoteChanged)
+    browserCount = Property(int, lambda s: s._v["browserCount"], notify=browserCountChanged)
+    browserModel = Property(QObject, lambda s: s._browser_model, constant=True)
 
     def __init__(self, camera_provider: ImageProvider, qr_provider: ImageProvider,
                  thumb_provider: ThumbProvider, settings: AppSettings | None = None, parent=None, *,
@@ -260,6 +301,8 @@ class AppController(QObject):
         self._v = dict(_DEFAULTS)
         self._v["history"] = []
         self._devices = DeviceModel()
+        self._browser_model = BrowserModel()
+        self._browser = FileBrowser()
         self._worker_factory = worker_factory or VisionWorker
         self._worker: VisionWorker | None = None
         self._file_path: Path | None = None
@@ -376,7 +419,16 @@ class AppController(QObject):
 
     def _phase_timeout(self) -> None:
         if self._phase_next and self._v["senderPhase"] == self._phase_next[0]:
-            self._set_sender_phase(self._phase_next[1])
+            finished = self._phase_next[0] == "done"
+            target = self._phase_next[1]
+            self._phase_next = None
+            if finished:
+                # The file was delivered: drop it so the card leaves the screen
+                # and a fresh selection can be made. (A failed send keeps the
+                # file so the user can retry.)
+                self.clearFile()
+            else:
+                self._set_sender_phase(target)
             self._refresh_can_send()
         self._phase_next = None
 
@@ -403,7 +455,7 @@ class AppController(QObject):
         config = self._gesture_config()
         config.require_motion = not self._v["easyThrow"]
         self._throw_speed = config.throw_speed
-        worker = self._worker_factory(config, self._v["mode"],
+        worker = self._worker_factory(config, "browse" if self._v["browsing"] else self._v["mode"],
                                       camera_index=self._settings.camera_index)
         worker.live.connect(self._camera_live)
         worker.frameReady.connect(self._on_frame)
@@ -496,6 +548,19 @@ class AppController(QObject):
                 self._gesture_note("CANCELLED (the hand left the picture)")
                 if self._v["senderPhase"] == "holding":
                     self._set_sender_phase("idle")
+            elif kind == "browse_open":
+                self._gesture_note("PEACE SIGN: file explorer opened")
+                if not self._open_browser(tell_worker=False):
+                    self._tell_worker_mode()
+            elif kind == "browse_close":
+                self._gesture_note("PEACE SIGN: file explorer closed")
+                self._close_browser(tell_worker=False)
+            elif kind == "swipe" and self._v["browsing"]:
+                self._gesture_note(f"SWIPE {event.detail}")
+                self._browser_swipe(event.detail)
+            elif kind == "pinch" and self._v["browsing"]:
+                self._gesture_note("PINCH: select")
+                self.browserSelect()
             elif kind == "catch":
                 self._gesture_note("CATCH")
                 if self._v["receivePhase"] == "offered":
@@ -505,6 +570,8 @@ class AppController(QObject):
                     self._toast("Nothing to catch yet: the sender has to throw a file first.")
 
     def _apply_mode(self, mode: str) -> None:
+        if mode != "send" and self._v["browsing"]:
+            self._set("browsing", False)                  # an offer or mode change closes the explorer
         self._set("mode", mode)
         if self._worker is not None:
             self._worker.set_mode(mode)
@@ -520,6 +587,96 @@ class AppController(QObject):
     def setReceiveMode(self) -> None:
         self._mode_before_offer = None
         self._apply_mode("receive")
+
+    # ------------------------------------------------------------------ the file explorer
+    def _tell_worker_mode(self) -> None:
+        if self._worker is not None:
+            self._worker.set_mode(self._v["mode"])
+
+    def _browser_sync(self) -> None:
+        b = self._browser
+        self._browser_model.replace(b.entries)
+        self._set("browserTitle", b.title)
+        self._set("browserNote", b.note)
+        self._set("browserCount", len(b.entries))
+        self._set("browserIndex", b.index)
+
+    def _open_browser(self, *, tell_worker: bool = True) -> bool:
+        if self._v["senderPhase"] != "idle":
+            self._toast("Finish the current send first.")
+            return False
+        if self._v["mode"] != "send" or self._v["receivePhase"] != "none":
+            self._toast("Switch to Send mode to browse files.")
+            return False
+        self._browser_sync()
+        self._set("browsing", True)
+        if tell_worker and self._worker is not None:
+            self._worker.set_mode("browse")
+        return True
+
+    def _close_browser(self, *, tell_worker: bool = True) -> None:
+        if not self._v["browsing"]:
+            return
+        self._set("browsing", False)
+        if tell_worker:
+            self._tell_worker_mode()
+
+    @Slot()
+    def openBrowser(self) -> None:
+        self._open_browser()
+
+    @Slot()
+    def closeBrowser(self) -> None:
+        self._close_browser()
+
+    def _browser_swipe(self, direction: str) -> None:
+        if direction == "up":
+            self.browserMove(-1)
+        elif direction == "down":
+            self.browserMove(1)
+        elif direction == "right":
+            self.browserOpenFolder()
+        elif direction == "left":
+            self.browserBack()
+
+    @Slot(int)
+    def browserMove(self, delta: int) -> None:
+        if self._v["browsing"]:
+            self._browser.move(int(delta))
+            self._set("browserIndex", self._browser.index)
+
+    @Slot()
+    def browserOpenFolder(self) -> None:
+        if self._v["browsing"] and self._browser.open_folder():
+            self._browser_sync()
+
+    @Slot()
+    def browserBack(self) -> None:
+        if not self._v["browsing"]:
+            return
+        if self._browser.back():
+            self._browser_sync()
+        else:
+            self._toast("This is the top. Use the peace sign to close.")
+
+    @Slot()
+    def browserSelect(self) -> None:
+        """Pinch / click: open a folder, or pick a file and close the explorer."""
+        if not self._v["browsing"]:
+            return
+        path = self._browser.enter()
+        if path is None:
+            self._browser_sync()
+            return
+        self.chooseFile(str(path))
+        if self._file_path is not None and Path(self._file_path) == Path(path):
+            self._close_browser()
+
+    @Slot(int)
+    def browserActivate(self, index: int) -> None:
+        if self._v["browsing"]:
+            self._browser.select_index(int(index))
+            self.browserSelect()
 
     # ------------------------------------------------------------------ choosing a file
     @Slot(str)
@@ -627,6 +784,7 @@ class AppController(QObject):
         if self._v["senderPhase"] in BUSY_PHASES:
             self._toast("A transfer is already running.")
             return False
+        self._close_browser()
         if self._file_path is None:
             log.info("not sent: no file chosen")
             self._toast("Choose a file first.")
@@ -691,7 +849,7 @@ class AppController(QObject):
     # ------------------------------------------------------------------ incoming files
     def _show_offer(self, offer: dict) -> None:
         if self._v["receivePhase"] != "none":
-            self._service.answer_offer(offer["transfer_id"], False)   # one at a time
+            self._service.answer_offer(offer["transfer_id"], False, "busy")   # one at a time
             self._toast(f"Declined a second incoming file from {offer['sender']} (busy).")
             return
         self._dismiss_timer.stop()

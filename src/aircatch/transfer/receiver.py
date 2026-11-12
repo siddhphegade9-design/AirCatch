@@ -381,8 +381,10 @@ class Receiver:
             except Exception:
                 log.exception("decide callback raised; treating as declined")
                 accepted = False
-            if not accepted:
-                await self._reject(writer, offer, "declined")
+            if accepted is not True:
+                # a callback may answer with a reason string (e.g. "busy") instead of a plain no
+                reason = accepted if isinstance(accepted, str) and accepted else "declined"
+                await self._reject(writer, offer, reason)
                 return
             await send_message(writer, {"type": "accept", "receiver_name": self._device_name})
             self._emit("accepted", offer)

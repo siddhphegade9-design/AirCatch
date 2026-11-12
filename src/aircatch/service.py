@@ -353,13 +353,14 @@ class NetworkService(threading.Thread):
             return accepted
         finally:                                 # also runs when the receiver's timeout cancels us
             self._offers.pop(offer.transfer_id, None)
-            self._emit("offer_closed", {"transfer_id": offer.transfer_id, "accepted": accepted})
+            self._emit("offer_closed", {"transfer_id": offer.transfer_id, "accepted": accepted is True})
 
-    def answer_offer(self, transfer_id: str, accepted: bool) -> None:
+    def answer_offer(self, transfer_id: str, accepted: bool, reason: str = "") -> None:
+        """Answer an offer. A refusal may carry a reason the sender understands, e.g. "busy"."""
         def resolve() -> None:
             future = self._offers.get(transfer_id)
             if future is not None and not future.done():
-                future.set_result(bool(accepted))
+                future.set_result(True if accepted else (reason or False))
         self._call_soon(resolve)
 
     def _on_transfer_event(self, event: TransferEvent) -> None:

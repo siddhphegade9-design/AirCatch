@@ -347,7 +347,7 @@ def test_status_gives_clear_feedback_at_every_step():
     for t, hands in frames:
         engine.update(hands, t)
         seen.setdefault(engine.status.state, engine.status.hint)
-    assert seen["idle"] == "Open your palm" and "fist" in seen["ready"]
+    assert seen["idle"].startswith("Open your palm") and "fist" in seen["ready"]
     assert engine.status.state == "holding" and "Flick" in engine.status.hint
     assert engine.status.pose == Pose.FIST and engine.status.hand_present
     assert engine.status.fingers == (False, False, False, False)
@@ -448,3 +448,171 @@ def test_engine_is_fast_enough():
         engine.update(hands, t)
     per_frame_ms = (time.perf_counter() - start) / len(frames) * 1000
     assert per_frame_ms < 2.0
+
+
+# =========================================================== browsing: peace sign, swipes, pinch
+def browse(**cfg):
+    return GestureEngine(GestureConfig(**cfg), "browse")
+
+
+def swipe_movie(end, start=(0.5, 0.5), pose="open", dur=0.2, **kw):
+    return [Seg(0.4, pose, start=start, **kw), Seg(dur, pose, start=start, end=end, **kw),
+            Seg(0.4, pose, start=end, **kw)]
+
+
+def test_pinch_and_peace_are_recognised_but_nothing_else_is_mistaken_for_them():
+    clf = PoseClassifier(GestureConfig())
+    assert clf.classify(make_hand("pinch")).pinch
+    assert clf.classify(make_hand("victory")).victory and not clf.classify(make_hand("victory")).pinch
+    for name in ("open", "fist", "point", "three", "rock"):
+        r = PoseClassifier(GestureConfig()).classify(make_hand(name))
+        assert not r.pinch and not r.victory, name
+
+
+@pytest.mark.parametrize("tilt,pitch", [(0.0, 0.0), (1.0, 0.0), (-1.2, 0.0), (0.0, 1.0), (0.0, -1.0),
+                                        (0.9, 0.7), (-0.9, -0.7)])
+def test_pinch_and_peace_survive_the_hand_being_turned(tilt, pitch):
+    """Sideways (tilt) or fingertips-towards-the-camera (pitch), up to about 70 degrees."""
+    assert PoseClassifier(GestureConfig()).classify(make_hand("pinch", tilt=tilt, pitch=pitch)).pinch
+    assert PoseClassifier(GestureConfig()).classify(make_hand("victory", tilt=tilt, pitch=pitch)).victory
+
+
+def test_peace_sign_opens_then_closes_the_explorer():
+    e = send()
+    ev = run(e, [Seg(0.4, "open"), Seg(0.8, "victory")])
+    assert kinds(ev).count("browse_open") == 1 and e.mode == "browse"
+    ev = run(e, [Seg(0.4, "open"), Seg(0.8, "victory")], t0=200.0)
+    assert kinds(ev).count("browse_close") == 1 and e.mode == "send"
+
+
+def test_holding_the_peace_sign_toggles_only_once():
+    e = send()
+    ev = run(e, [Seg(0.4, "open"), Seg(4.0, "victory")])
+    assert kinds(ev) .count("browse_open") == 1 and "browse_close" not in kinds(ev)
+
+
+def test_a_brief_peace_sign_does_nothing_and_a_file_in_hand_blocks_it():
+    e = send()
+    assert "browse_open" not in kinds(run(e, [Seg(0.4, "open"), Seg(0.25, "victory"), Seg(0.4, "open")]))
+    e = send()
+    ev = run(e, [Seg(0.6, "open"), Seg(0.4, "fist"), Seg(1.0, "victory")])     # holding a grabbed file
+    assert "grab" in kinds(ev) and "browse_open" not in kinds(ev)
+
+
+@pytest.mark.parametrize("end,name", [((0.8, 0.5), "right"), ((0.2, 0.5), "left"),
+                                      ((0.5, 0.8), "down"), ((0.5, 0.2), "up")])
+def test_a_quick_open_palm_swipe_gives_its_direction(end, name):
+    ev = run(browse(), swipe_movie(end))
+    swipes = [e for e in ev if e.kind == "swipe"]
+    assert [s.detail for s in swipes] == [name]
+
+
+@pytest.mark.parametrize("tilt,pitch,end,name", [
+    (1.1, 0.0, (0.2, 0.5), "left"),        # palm turned ~60 degrees to the camera, moving left
+    (-1.1, 0.0, (0.8, 0.5), "right"),
+    (0.0, 1.1, (0.5, 0.8), "down"),        # fingertips pointing at the camera, moving down
+    (0.0, -1.1, (0.5, 0.2), "up"),
+])
+def test_swipes_work_with_the_hand_turned_sideways_or_pointing_at_the_camera(tilt, pitch, end, name):
+    e = browse()
+    frames = []
+    t, rng = 100.0, random.Random(3)
+    for pos, dur in (((0.5, 0.5), 0.4), (end, 0.2), (end, 0.4)):
+        pass
+    start = (0.5, 0.5)
+    t = 100.0
+    out = []
+    for center_a, center_b, dur in ((start, start, 0.4), (start, end, 0.2), (end, end, 0.4)):
+        n = round(dur * 30)
+        for i in range(n):
+            f = (i + 1) / n
+            c = (center_a[0] + (center_b[0] - center_a[0]) * f, center_a[1] + (center_b[1] - center_a[1]) * f)
+            t += 1 / 30
+            out.extend(e.update([make_hand("open", center=c, tilt=tilt, pitch=pitch, noise=0.01, rng=rng)], t))
+    assert [x.detail for x in out if x.kind == "swipe"] == [name]
+
+
+def test_the_hand_coming_back_after_a_swipe_is_not_a_second_swipe():
+    movie = [Seg(0.4, "open", start=(0.2, 0.5)), Seg(0.2, "open", start=(0.2, 0.5), end=(0.8, 0.5)),
+             Seg(0.25, "open", start=(0.8, 0.5), end=(0.2, 0.5)), Seg(0.5, "open", start=(0.2, 0.5))]
+    swipes = [e.detail for e in run(browse(), movie) if e.kind == "swipe"]
+    assert swipes == ["right"]
+
+
+def test_slow_drifting_and_diagonal_movement_do_not_swipe():
+    assert not [e for e in run(browse(), swipe_movie((0.8, 0.5), dur=1.5)) if e.kind == "swipe"]
+    assert not [e for e in run(browse(), swipe_movie((0.64, 0.75))) if e.kind == "swipe"]
+    assert not [e for e in run(browse(), swipe_movie((0.8, 0.5), pose="fist")) if e.kind == "swipe"]
+
+
+def test_pinch_selects_once_and_must_be_released_before_selecting_again():
+    e = browse()
+    ev = run(e, [Seg(0.4, "open"), Seg(1.5, "pinch")])
+    assert kinds(ev).count("pinch") == 1
+    ev = run(e, [Seg(0.4, "open"), Seg(0.2, "pinch"), Seg(0.4, "open")], t0=200.0)        # too short
+    assert "pinch" not in kinds(ev)
+    ev = run(e, [Seg(0.4, "open"), Seg(0.6, "pinch")], t0=300.0)
+    assert kinds(ev).count("pinch") == 1
+
+
+def test_moving_while_pinching_never_swipes():
+    ev = run(browse(), [Seg(0.4, "open"), Seg(0.2, "pinch", start=(0.5, 0.5), end=(0.9, 0.5)),
+                        Seg(0.5, "pinch", start=(0.9, 0.5))])
+    assert "swipe" not in kinds(ev)
+
+
+def test_swipes_and_pinches_do_nothing_outside_browse_mode():
+    for e in (send(), receive()):
+        ev = run(e, swipe_movie((0.8, 0.5)) + [Seg(0.8, "pinch")])
+        assert not {"swipe", "pinch"} & set(kinds(ev))
+
+
+def test_a_small_or_edge_on_hand_keeps_a_sane_scale():
+    from aircatch.gestures.pose import palm_geometry
+    front = palm_geometry(make_hand("open"))[2]
+    for kw in ({"tilt": 1.4}, {"pitch": 1.4}, {"tilt": 1.1, "pitch": 0.6}):
+        size = palm_geometry(make_hand("open", **kw))[2]
+        assert 0.6 * front < size < 1.4 * front, (kw, size, front)
+
+
+# =========================================================== smoothing
+def test_smoothing_reduces_jitter_but_not_a_fast_swipe():
+    from aircatch.gestures.smoothing import LandmarkSmoother
+    rng = random.Random(5)
+    raw, smooth, sm = [], [], LandmarkSmoother()
+    t = 100.0
+    for _ in range(90):                                   # still, noisy hand
+        t += 1 / 30
+        h = make_hand("open", noise=0.04, rng=rng)
+        raw.append(h.landmarks[8][1])
+        smooth.append(sm.apply([h], t)[0].landmarks[8][1])
+    def spread(v):
+        m = sum(v[20:]) / len(v[20:])
+        return (sum((x - m) ** 2 for x in v[20:]) / len(v[20:])) ** 0.5
+    assert spread(smooth) < 0.6 * spread(raw)
+    # a fast swipe keeps its speed: the engine still sees it
+    e, sm = browse(), LandmarkSmoother()
+    out = []
+    for t, hands in render(swipe_movie((0.8, 0.5))):
+        out.extend(e.update(sm.apply(hands, t), t))
+    assert [x.detail for x in out if x.kind == "swipe"] == ["right"]
+
+
+def test_smoothing_handles_two_hands_and_a_hand_reappearing():
+    from aircatch.gestures.smoothing import LandmarkSmoother
+    sm = LandmarkSmoother()
+    a, b = make_hand("open", center=(0.25, 0.5)), make_hand("fist", center=(0.75, 0.5))
+    for i in range(5):
+        out = sm.apply([a, b] if i % 2 == 0 else [b, a], 100 + i / 30)    # order swaps: still matched by position
+    assert abs(out[0].landmarks[0][0] - a.landmarks[0][0]) < 1e-6 and abs(out[1].landmarks[0][0] - b.landmarks[0][0]) < 1e-6
+    sm.apply([], 101.0)
+    again = sm.apply([a], 102.0)[0]                                     # long gap: starts fresh, no lag
+    assert again.landmarks == a.landmarks
+
+
+def test_a_throw_still_registers_through_the_smoother():
+    from aircatch.gestures.smoothing import LandmarkSmoother
+    e, sm, out = send(), LandmarkSmoother(), []
+    for t, hands in render(FLICK_RIGHT):
+        out.extend(e.update(sm.apply(hands, t), t))
+    assert "throw" in kinds(out) and next(x for x in out if x.kind == "throw").detail == "right"

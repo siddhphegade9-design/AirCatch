@@ -17,6 +17,7 @@ from PySide6.QtGui import QImage
 
 from aircatch.gestures.config import GestureConfig
 from aircatch.gestures.engine import GestureEngine
+from aircatch.gestures.smoothing import LandmarkSmoother
 from aircatch.gestures.tracker import HandTracker, TrackerError
 
 _LINKS = ((0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10), (10, 11),
@@ -113,6 +114,7 @@ class VisionWorker(QThread):
             return
         try:
             engine = GestureEngine(self._config, self._mode)
+            smoother = LandmarkSmoother() if self._config.smooth_landmarks else None
             self.live.emit()
             while not self._stop_event.is_set():
                 ok, frame = source.read()
@@ -127,7 +129,11 @@ class VisionWorker(QThread):
                 if motion is not None:
                     engine.cfg.require_motion = motion
                 frame = cv2.flip(frame, 1)                  # mirror: feels natural
-                events = engine.update(tracker.process(frame), self._clock())
+                now = self._clock()
+                hands = tracker.process(frame)
+                if smoother is not None:
+                    hands = smoother.apply(hands, now)
+                events = engine.update(hands, now)
                 status = engine.status
                 if status.hand is not None:
                     draw_skeleton(frame, status.hand.landmarks)

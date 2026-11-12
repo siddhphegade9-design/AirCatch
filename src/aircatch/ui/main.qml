@@ -365,7 +365,7 @@ Window {
                                 alert = (p === "failed")
                                 launch.stop(); zoomOut.stop()
                                 if (was === "holding") { zoomBack.restart() }
-                                else if (opacity < 0.99 || k < 0.99) { popIn.restart() }
+                                else if (backend.hasFile && (opacity < 0.99 || k < 0.99)) { popIn.restart() }
                                 else if (p === "failed") { scShake.restart() }
                             }
                         }
@@ -654,6 +654,7 @@ Window {
                         anchors.margins: 16
                         spacing: 8
                         Btn { label: "Choose file"; primary: false; onClicked: fileDialog.open() }
+                        Btn { label: "Browse ✌"; primary: false; onClicked: backend.openBrowser() }
                         Btn {
                             Layout.fillWidth: true
                             label: ["launched", "waiting", "sending"].indexOf(backend.senderPhase) >= 0 ? "Sending…"
@@ -1112,6 +1113,119 @@ Window {
             if (ok) joinCloser.restart()
         }
         function onToastChanged() { toastText.text = backend.toast; toast.shown = true; toastTimer.restart() }
+    }
+
+    // ---- gesture file explorer -----------------------------------------------------------------
+    Rectangle {
+        id: explorer
+        z: 250
+        anchors.fill: parent
+        color: "#cc050a14"
+        opacity: backend.browsing ? 1 : 0
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: root.d(180) } }
+        MouseArea { anchors.fill: parent; onClicked: backend.closeBrowser() }
+
+        Rectangle {
+            id: panel
+            anchors.centerIn: parent
+            width: Math.min(640, parent.width - 60)
+            height: Math.min(560, parent.height - 80)
+            radius: 20
+            color: root.cardColor; border.color: root.lineColor
+            scale: backend.browsing ? 1 : 0.94
+            Behavior on scale { NumberAnimation { duration: root.d(220); easing.type: Easing.OutCubic } }
+            MouseArea { anchors.fill: parent }          // clicks inside must not close it
+
+            Column {
+                id: head
+                x: 22; y: 18; width: parent.width - 44
+                spacing: 4
+                Text { text: "Choose a file"; color: root.textColor; font.pixelSize: 20; font.weight: Font.DemiBold }
+                Text {
+                    width: parent.width; elide: Text.ElideMiddle
+                    text: backend.browserTitle; color: root.cyan; font.pixelSize: 12
+                }
+            }
+            Btn {
+                anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 16
+                label: "Close"; primary: false
+                onClicked: backend.closeBrowser()
+            }
+
+            ListView {
+                id: rows
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: head.bottom; anchors.topMargin: 14
+                anchors.bottom: foot.top; anchors.bottomMargin: 8
+                anchors.leftMargin: 14; anchors.rightMargin: 14
+                clip: true
+                model: backend.browserModel
+                currentIndex: backend.browserIndex
+                highlightMoveDuration: root.d(120)
+                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+                delegate: Rectangle {
+                    width: rows.width; height: 46; radius: 11
+                    readonly property bool active: index === backend.browserIndex
+                    color: active ? "#12305a" : "transparent"
+                    border.color: active ? root.cyan : "transparent"
+                    border.width: active ? 2 : 0
+                    Behavior on color { ColorAnimation { duration: root.d(100) } }
+                    Rectangle {
+                        id: icon
+                        x: 10; anchors.verticalCenter: parent.verticalCenter
+                        width: 30; height: 30; radius: 8
+                        color: isDir ? "#1d4f7a" : "#243252"
+                        Text {
+                            anchors.centerIn: parent
+                            text: isDir ? "📁" : badge
+                            color: root.textColor; font.pixelSize: isDir ? 15 : 9; font.weight: Font.DemiBold
+                        }
+                    }
+                    Text {
+                        anchors.left: icon.right; anchors.leftMargin: 12
+                        anchors.right: info.left; anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: name; elide: Text.ElideMiddle
+                        color: root.textColor; font.pixelSize: 14
+                    }
+                    Text {
+                        id: info
+                        anchors.right: parent.right; anchors.rightMargin: 14
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: isDir ? "›" : detail; color: root.mutedColor; font.pixelSize: isDir ? 20 : 12
+                    }
+                    MouseArea { anchors.fill: parent; onClicked: backend.browserActivate(index) }
+                }
+                Text {
+                    anchors.centerIn: parent
+                    visible: backend.browserCount === 0
+                    text: backend.browserNote; color: root.mutedColor; font.pixelSize: 14
+                }
+            }
+
+            Column {
+                id: foot
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.margins: 18
+                spacing: 4
+                Text {
+                    width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
+                    visible: backend.browserCount > 0 && backend.browserNote !== ""
+                    text: backend.browserNote; color: root.amber; font.pixelSize: 12
+                }
+                Text {
+                    width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
+                    text: "Swipe ↑ ↓ move  ·  → open folder  ·  ← back  ·  pinch select  ·  ✌ close"
+                    color: root.mutedColor; font.pixelSize: 12
+                }
+                Text {
+                    width: parent.width; horizontalAlignment: Text.AlignHCenter
+                    visible: backend.cameraActive
+                    text: backend.gestureHint; color: root.cyan; font.pixelSize: 12
+                }
+            }
+        }
     }
 
     // ---- toast -------------------------------------------------------------------------------
