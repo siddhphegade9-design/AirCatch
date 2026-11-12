@@ -26,7 +26,8 @@ from aircatch.security.trust import TrustedPeer, TrustStore
 from aircatch.transfer.events import EventCallback, EventKind, TransferEvent
 from aircatch.transfer.filenames import reserve_destination, sanitize_filename
 from aircatch.transfer.protocol import (CHUNK_SIZE, PROTOCOL_VERSION, STREAM_LIMIT,
-                                        ProtocolError, read_message, send_message)
+                                        ProtocolError, decode_thumbnail, read_message,
+                                        send_message)
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class IncomingOffer:
     peer: str                # network address of the sender
     device_id: str = ""       # verified identity of the sender (secure mode)
     verified: bool = False   # True when the sender proved who it is with its certificate
+    thumbnail: bytes = b""   # optional validated JPEG/PNG preview (still untrusted image data)
 
 
 DecideCallback = Callable[[IncomingOffer], Awaitable[bool]]
@@ -217,7 +219,7 @@ class Receiver:
             sender = trusted.name
         return IncomingOffer(transfer_id, sender, sanitize_filename(filename), filename,
                              size, peer, trusted.device_id if trusted else "",
-                             trusted is not None), ""
+                             trusted is not None, decode_thumbnail(msg.get("thumbnail"))), ""
 
     def _precheck(self, offer: IncomingOffer) -> str:
         if offer.transfer_id in self._active:
@@ -258,6 +260,11 @@ class Receiver:
         self._pairing = session
         return PairingPayload(advertise_host, self.port, self._identity.fingerprint,
                               session.token, self._identity.name)
+
+    def allow_peer(self, peer: TrustedPeer) -> None:
+        """Let a device we just paired with (as the joining side) through TLS right away."""
+        if self._ssl_ctx is not None:
+            self._ssl_ctx.load_verify_locations(cadata=peer.cert_pem)
 
     def close_pairing(self) -> None:
         if self._pairing is not None:

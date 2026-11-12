@@ -6,6 +6,8 @@ File bytes are sent raw (no framing) between the 'accept' and 'done' messages.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import struct
 
@@ -47,3 +49,37 @@ async def read_message(reader: asyncio.StreamReader, timeout: float) -> dict:
     if not isinstance(message, dict) or not isinstance(message.get("type"), str):
         raise ProtocolError("malformed message")
     return message
+
+
+# ---- optional preview image carried inside the offer (protocol v1, backward compatible) ----
+MAX_THUMBNAIL_BYTES = 20 * 1024                      # raw JPEG/PNG bytes
+MAX_THUMBNAIL_B64 = 4 * ((MAX_THUMBNAIL_BYTES + 2) // 3)
+_JPEG_MAGIC, _PNG_MAGIC = b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n"
+
+
+def encode_thumbnail(data: bytes | None) -> str | None:
+    """Base64 text for the offer, or None when there is nothing usable to send."""
+    if not data or len(data) > MAX_THUMBNAIL_BYTES:
+        return None
+    if not (data.startswith(_JPEG_MAGIC) or data.startswith(_PNG_MAGIC)):
+        return None
+    return base64.b64encode(data).decode("ascii")
+
+
+def decode_thumbnail(value: object) -> bytes:
+    """Validate a thumbnail received from the network. Anything doubtful becomes b'' (no preview).
+
+    A bad thumbnail never rejects the transfer; it is simply ignored. The bytes are still
+    untrusted: the UI must decode them with a bounded image reader.
+    """
+    if not isinstance(value, str) or not value or len(value) > MAX_THUMBNAIL_B64:
+        return b""
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error):
+        return b""
+    if not raw or len(raw) > MAX_THUMBNAIL_BYTES:
+        return b""
+    if not (raw.startswith(_JPEG_MAGIC) or raw.startswith(_PNG_MAGIC)):
+        return b""
+    return raw

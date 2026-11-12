@@ -7,3 +7,4 @@ platformdirs>=4.0
 qrcode>=7.4
 zeroconf>=0.130
 pytest>=8.0
+pillow>=10

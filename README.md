@@ -1,6 +1,6 @@
 # AirCatch
 
-Gesture-controlled wireless file transfer. Milestone 1: app shell + webcam preview. Milestone 2: transfer engine (no UI yet).
+Gesture-controlled wireless file transfer: pair two devices, grab a file with your hand, throw it, and catch it on the other laptop.
 
 ## Setup (Windows, PowerShell, from this folder)
     py -3.11 -m venv .venv
@@ -58,3 +58,21 @@ Try it with your camera (a hand test window):
     python gesture_demo.py --benchmark 10     (speed numbers)
 
 Docs: `docs/gestures.md`.
+
+
+## Milestone 6: the app
+
+    python run.py
+
+Two instances on one PC (separate folders = separate devices):
+
+    python run.py --config-dir devices\A --name Laptop-A --download-dir devices\A\inbox --port 5001
+    python run.py --config-dir devices\B --name Laptop-B --download-dir devices\B\inbox --port 5002
+
+Pair with **Pair a device** / **Join with code**, drop a file, **Send** (or grab and throw with the
+camera), then **Catch** on the other window. Huawei-style animations: the file zooms out and flies away
+on the sender, rises from the bottom on the receiver, and zooms in once the file is verified.
+
+Allow AirCatch through the Windows firewall on **Private networks**.
+Full guide, safety notes and the list of what is still unverified: `docs/milestone-6.md`.
+Testing on two real PCs, step by step: `docs/two-pc-test.md`.

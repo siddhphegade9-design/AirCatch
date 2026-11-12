@@ -23,6 +23,21 @@ are identical inside and outside TLS.
 In secure mode the receiver ignores `sender_name` and shows the name stored for the sender's verified certificate.
 Closing the connection at any time cancels the transfer; the receiver deletes its temporary file.
 
+## Optional preview image (added in Milestone 6, still protocol version 1)
+
+An `offer` may carry one extra field, `"thumbnail"`: standard base64 of a small JPEG or PNG
+(at most 20 KB before encoding, so the whole control message stays far below the 64 KB limit).
+The receiver's screen shows it while the person decides, so they see the real picture rise up
+before accepting.
+
+Rules for the receiver, because the field comes from the network:
+- it is **optional**: older devices ignore the field, and a missing one just means "show a file-type badge";
+- it is **never a reason to reject** an offer: if the value is not valid base64, is too long, is larger
+  than 20 KB, or does not start with the JPEG or PNG signature, it is silently dropped;
+- the bytes are still untrusted image data, so the UI decodes them with a size-bounded reader
+  (at most 1024 pixels on the longest side) and ignores anything that fails;
+- it only ever arrives from a paired, certificate-verified device, and nothing is saved from it.
+
 ## Pairing conversation
 The host opens a **pairing window** (default 120 s, single use, 3 failed attempts) and shows a pairing string / QR code:
 

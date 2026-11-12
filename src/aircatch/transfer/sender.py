@@ -15,7 +15,8 @@ from aircatch.security.identity import DeviceIdentity, fingerprint_from_der
 from aircatch.security.trust import TrustedPeer
 from aircatch.transfer.events import EventCallback, EventKind, TransferEvent
 from aircatch.transfer.protocol import (CHUNK_SIZE, PROTOCOL_VERSION, STREAM_LIMIT,
-                                        ProtocolError, read_message, send_message)
+                                        ProtocolError, encode_thumbnail, read_message,
+                                        send_message)
 
 PROGRESS_INTERVAL = 0.05
 
@@ -47,7 +48,8 @@ async def send_file(host: str, port: int, path: str | Path, *, sender_name: str,
                     on_event: EventCallback | None = None, connect_timeout: float = 10.0,
                     accept_timeout: float = 60.0, idle_timeout: float = 30.0,
                     identity: DeviceIdentity | None = None,
-                    peer: TrustedPeer | None = None) -> SendResult:
+                    peer: TrustedPeer | None = None,
+                    thumbnail: bytes | None = None) -> SendResult:
     """Send one file. Expected failures are returned (ok=False), not raised.
 
     Secure mode: pass both `identity` (this device) and `peer` (the paired receiver).
@@ -102,9 +104,13 @@ async def send_file(host: str, port: int, path: str | Path, *, sender_name: str,
             der = ssl_object.getpeercert(binary_form=True) if ssl_object else None
             if not der or fingerprint_from_der(der) != peer.device_id:
                 return failure("untrusted_peer", size)
-        await send_message(writer, {"type": "offer", "version": PROTOCOL_VERSION,
-                                    "transfer_id": transfer_id, "sender_name": sender_name,
-                                    "filename": filename, "size": size})
+        offer = {"type": "offer", "version": PROTOCOL_VERSION,
+                 "transfer_id": transfer_id, "sender_name": sender_name,
+                 "filename": filename, "size": size}
+        preview = encode_thumbnail(thumbnail)   # optional small preview for the receiver's screen
+        if preview is not None:
+            offer["thumbnail"] = preview
+        await send_message(writer, offer)
         emit("offer", total=size)
         reply = await read_message(reader, accept_timeout)
         receiver_name = str(reply.get("receiver_name", ""))[:100]
