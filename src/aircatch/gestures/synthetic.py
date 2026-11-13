@@ -34,9 +34,11 @@ _POSES = {  # which of (index, middle, ring, pinky) are stretched
     "open": (1, 1, 1, 1), "fist": (0, 0, 0, 0), "point": (1, 0, 0, 0),
     "victory": (1, 1, 0, 0), "three": (1, 1, 1, 0), "rock": (1, 0, 0, 1),
     "pinch": (0, 1, 1, 1),     # index bent down to meet the thumb, other three straight
+    "thumbs_up": (0, 0, 0, 0), # fist with the thumb stuck straight out, pointing along the hand
 }
 # thumb reaching round to touch the bent index fingertip (see "pinch")
 _PINCH_THUMB = [(0.20, -0.30), (0.50, -0.50), (0.85, -0.52), (1.20, -0.36)]
+_THUMBS_UP_THUMB = [(0.20, -0.30), (0.55, -0.45), (0.95, -0.56), (1.35, -0.66)]
 
 
 def _mix(a, b, t):
@@ -73,6 +75,8 @@ def make_hand(pose: str = "open", *, center: tuple[float, float] = (0.5, 0.5),
         pts = [_mix(o, c, t) for o, c in zip(_OPEN[name], _CURLED[name])]
         if name == "thumb" and pose == "pinch":
             pts = list(_PINCH_THUMB)
+        elif name == "thumb" and pose == "thumbs_up":
+            pts = list(_THUMBS_UP_THUMB)
         local.extend(pts)
     local.insert(0, (0.0, 0.0))                                   # wrist
     # shift so the palm centre (wrist + 4 knuckles) sits at the origin

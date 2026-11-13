@@ -479,9 +479,9 @@ def test_pinch_and_peace_survive_the_hand_being_turned(tilt, pitch):
 
 def test_peace_sign_opens_then_closes_the_explorer():
     e = send()
-    ev = run(e, [Seg(0.4, "open"), Seg(0.8, "victory")])
+    ev = run(e, [Seg(0.4, "open"), Seg(1.1, "victory")])
     assert kinds(ev).count("browse_open") == 1 and e.mode == "browse"
-    ev = run(e, [Seg(0.4, "open"), Seg(0.8, "victory")], t0=200.0)
+    ev = run(e, [Seg(0.4, "open"), Seg(1.1, "victory")], t0=200.0)
     assert kinds(ev).count("browse_close") == 1 and e.mode == "send"
 
 
@@ -507,28 +507,56 @@ def test_a_quick_open_palm_swipe_gives_its_direction(end, name):
     assert [s.detail for s in swipes] == [name]
 
 
-@pytest.mark.parametrize("tilt,pitch,end,name", [
-    (1.1, 0.0, (0.2, 0.5), "left"),        # palm turned ~60 degrees to the camera, moving left
-    (-1.1, 0.0, (0.8, 0.5), "right"),
-    (0.0, 1.1, (0.5, 0.8), "down"),        # fingertips pointing at the camera, moving down
-    (0.0, -1.1, (0.5, 0.2), "up"),
-])
-def test_swipes_work_with_the_hand_turned_sideways_or_pointing_at_the_camera(tilt, pitch, end, name):
-    e = browse()
-    frames = []
-    t, rng = 100.0, random.Random(3)
-    for pos, dur in (((0.5, 0.5), 0.4), (end, 0.2), (end, 0.4)):
-        pass
-    start = (0.5, 0.5)
-    t = 100.0
-    out = []
-    for center_a, center_b, dur in ((start, start, 0.4), (start, end, 0.2), (end, end, 0.4)):
-        n = round(dur * 30)
+TURNS = [(0.0, 0.0), (1.1, 0.0), (-1.1, 0.0), (0.0, 1.1), (0.0, -1.1), (0.8, 0.8), (-0.8, 0.8)]
+# "tilt" = fingertips swing towards / away from the camera; "pitch" = palm turned edge-on (sideways)
+DIRECTIONS = [((0.8, 0.5), "right"), ((0.2, 0.5), "left"), ((0.5, 0.8), "down"), ((0.5, 0.2), "up")]
+
+
+def turned_swipe(engine, end, *, tilt=0.0, pitch=0.0, pose="open", start=(0.5, 0.5), dur=0.2):
+    out, rng, t = [], random.Random(3), 100.0
+    for a, b, d in ((start, start, 0.4), (start, end, dur), (end, end, 0.4)):
+        n = round(d * 30)
         for i in range(n):
             f = (i + 1) / n
-            c = (center_a[0] + (center_b[0] - center_a[0]) * f, center_a[1] + (center_b[1] - center_a[1]) * f)
+            c = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
             t += 1 / 30
-            out.extend(e.update([make_hand("open", center=c, tilt=tilt, pitch=pitch, noise=0.01, rng=rng)], t))
+            out.extend(engine.update([make_hand(pose, center=c, tilt=tilt, pitch=pitch, noise=0.01, rng=rng)], t))
+    return [x.detail for x in out if x.kind == "swipe"]
+
+
+@pytest.mark.parametrize("tilt,pitch", TURNS)
+@pytest.mark.parametrize("end,name", DIRECTIONS)
+def test_every_swipe_direction_works_at_every_hand_angle(tilt, pitch, end, name):
+    """Sideways hand, fingertips towards the camera, and in between: all four directions."""
+    assert turned_swipe(browse(), end, tilt=tilt, pitch=pitch) == [name]
+
+
+@pytest.mark.parametrize("tilt,pitch", TURNS)
+def test_small_up_and_down_hand_movements_are_enough(tilt, pitch):
+    """Up/down swipes are shorter than sideways ones: about one palm length is enough."""
+    for end, name in (((0.5, 0.70), "down"), ((0.5, 0.30), "up")):
+        assert turned_swipe(browse(), end, tilt=tilt, pitch=pitch, dur=0.25) == [name]
+
+
+@pytest.mark.parametrize("pose", ["fist", "point", "three"])
+def test_up_down_swipes_do_not_depend_on_the_hand_reading_as_an_open_palm(pose):
+    """Fingers pointing at the camera look squashed and can read as a fist: still a swipe."""
+    assert turned_swipe(browse(), (0.5, 0.8), pose=pose) == ["down"]
+    assert turned_swipe(browse(), (0.5, 0.2), pose=pose) == ["up"]
+
+
+@pytest.mark.parametrize("sweep,drift,name", [((0.0, 1.2), 0.13, "down"), ((1.2, 0.0), -0.13, "up")])
+def test_a_wrist_flick_counts_even_when_the_palm_only_drifts_a_little(sweep, drift, name):
+    """Fingertips swing towards / away from the camera while the palm moves only half a palm length;
+    following all 21 points (not just the palm) makes up the rest."""
+    e, out, rng, t = browse(), [], random.Random(2), 100.0
+    for a, b, d in ((0.0, 0.0, 0.4), (0.0, 1.0, 0.2), (1.0, 1.0, 0.4)):
+        n = round(d * 30)
+        for i in range(n):
+            f = a + (b - a) * (i + 1) / n
+            tilt = sweep[0] + (sweep[1] - sweep[0]) * f
+            t += 1 / 30
+            out.extend(e.update([make_hand("open", center=(0.5, 0.5 + drift * f), tilt=tilt, noise=0.01, rng=rng)], t))
     assert [x.detail for x in out if x.kind == "swipe"] == [name]
 
 
@@ -541,30 +569,99 @@ def test_the_hand_coming_back_after_a_swipe_is_not_a_second_swipe():
 
 def test_slow_drifting_and_diagonal_movement_do_not_swipe():
     assert not [e for e in run(browse(), swipe_movie((0.8, 0.5), dur=1.5)) if e.kind == "swipe"]
-    assert not [e for e in run(browse(), swipe_movie((0.64, 0.75))) if e.kind == "swipe"]
-    assert not [e for e in run(browse(), swipe_movie((0.8, 0.5), pose="fist")) if e.kind == "swipe"]
 
 
 def test_pinch_selects_once_and_must_be_released_before_selecting_again():
     e = browse()
     ev = run(e, [Seg(0.4, "open"), Seg(1.5, "pinch")])
-    assert kinds(ev).count("pinch") == 1
-    ev = run(e, [Seg(0.4, "open"), Seg(0.2, "pinch"), Seg(0.4, "open")], t0=200.0)        # too short
-    assert "pinch" not in kinds(ev)
-    ev = run(e, [Seg(0.4, "open"), Seg(0.6, "pinch")], t0=300.0)
-    assert kinds(ev).count("pinch") == 1
+    assert kinds(ev).count("select") == 1
+    ev = run(e, [Seg(0.4, "open"), Seg(0.15, "pinch"), Seg(0.4, "open")], t0=200.0)         # too short
+    assert "select" not in kinds(ev)
+    ev = run(e, [Seg(0.4, "open"), Seg(0.9, "pinch")], t0=300.0)
+    assert kinds(ev).count("select") == 1
 
 
-def test_moving_while_pinching_never_swipes():
+def test_only_the_pinch_selects_by_default():
+    for pose in ("fist", "thumbs_up", "point", "victory", "three", "rock"):
+        assert "select" not in kinds(run(browse(), [Seg(0.4, "open"), Seg(1.0, pose)])), pose
+    assert "select" in kinds(run(browse(select_with_thumbs_up=True), [Seg(0.4, "open"), Seg(1.0, "thumbs_up")]))
+    assert "select" not in kinds(run(browse(select_with_pinch=False), [Seg(0.4, "open"), Seg(1.0, "pinch")]))
+
+
+@pytest.mark.parametrize("tilt,pitch", [tp for tp in TURNS if abs(tp[1]) < 1.0])
+def test_the_pinch_with_three_straight_fingers_selects_at_every_hand_angle(tilt, pitch):
+    """Any angle with the palm towards the camera. Edge-on (palm side-on) is ignored on purpose: the
+    fingers overlap in the picture and a real camera 'sees' pinches that are not there."""
+    e, out, rng, t = browse(), [], random.Random(6), 100.0
+    for pose, dur in (("open", 0.4), ("pinch", 0.9)):
+        for _ in range(round(dur * 30)):
+            t += 1 / 30
+            out.extend(e.update([make_hand(pose, tilt=tilt, pitch=pitch, noise=0.01, rng=rng)], t))
+    assert kinds(out).count("select") == 1
+
+
+@pytest.mark.parametrize("pitch", [1.1, -1.1, 1.4])
+def test_an_edge_on_hand_never_selects_or_toggles(pitch):
+    e, out, rng, t = browse(), [], random.Random(6), 100.0
+    for pose, dur in (("open", 0.4), ("pinch", 1.0), ("open", 0.4), ("victory", 1.5)):
+        for _ in range(round(dur * 30)):
+            t += 1 / 30
+            out.extend(e.update([make_hand(pose, pitch=pitch, noise=0.01, rng=rng)], t))
+    assert "select" not in kinds(out) and "browse_close" not in kinds(out)
+
+
+@pytest.mark.parametrize("rotation", [-35, -20, 0, 20, 35])
+def test_the_pinch_is_seen_when_the_hand_is_rotated_in_the_picture(rotation):
+    assert PoseClassifier(GestureConfig()).classify(make_hand("pinch", rotation=math.radians(rotation))).pinch
+
+
+def test_a_pinch_needs_the_other_three_fingers_straight():
+    """Index and thumb touching but the other fingers curled (like an 'OK' gone wrong) is not a select."""
+    clf = PoseClassifier(GestureConfig())
+    for curl in ([0.55, 1, 1, 1], [0.55, 0, 1, 1], [0.55, 1, 0, 1], [0.55, 1, 1, 0]):
+        assert not clf.classify(make_hand("pinch", curl=curl)).pinch, curl
+    assert clf.classify(make_hand("pinch", curl=[0.55, 0, 0, 0])).pinch
+
+
+def test_other_hand_shapes_rarely_look_like_a_pinch():
+    rng, bad = random.Random(5), 0
+    for pose in ("open", "fist", "point", "victory", "three", "rock", "thumbs_up"):
+        for _ in range(100):
+            bad += PoseClassifier(GestureConfig()).classify(
+                make_hand(pose, noise=0.03, rng=rng, rotation=math.radians(rng.uniform(-30, 30)))).pinch
+    assert bad / 700 < 0.03
+
+
+def test_a_hand_on_the_move_is_never_a_select_whatever_shape_it_seems_to_have():
+    # real cameras: a hand turned edge-on while swiping often LOOKS like a pinch. The movement wins.
     ev = run(browse(), [Seg(0.4, "open"), Seg(0.2, "pinch", start=(0.5, 0.5), end=(0.9, 0.5)),
-                        Seg(0.5, "pinch", start=(0.9, 0.5))])
-    assert "swipe" not in kinds(ev)
+                        Seg(0.1, "pinch", start=(0.9, 0.5))])
+    assert "select" not in kinds(ev)
 
 
-def test_swipes_and_pinches_do_nothing_outside_browse_mode():
+def test_pinch_selects_after_half_a_second_held_still_and_not_sooner():
+    assert kinds(run(browse(), [Seg(0.4, "open"), Seg(0.8, "pinch")])).count("select") == 1
+    assert "select" not in kinds(run(browse(), [Seg(0.4, "open"), Seg(0.4, "pinch"), Seg(0.5, "open")]))
+
+
+@pytest.mark.parametrize("tilt,pitch", [(0.0, 0.0), (0.6, 0.0), (-0.6, 0.0), (0.0, 0.8), (0.0, -0.8)])
+def test_thumbs_up_is_seen_when_the_hand_is_turned_a_bit(tilt, pitch):
+    assert PoseClassifier(GestureConfig()).classify(make_hand("thumbs_up", tilt=tilt, pitch=pitch)).thumbs_up
+
+
+def test_the_engine_says_why_a_swipe_was_rejected():
+    e = browse()
+    run(e, swipe_movie((0.5, 0.56)))                       # a small nudge down
+    assert "too short" in e.status.swipe_note
+    e = browse()
+    run(e, swipe_movie((0.5, 0.8), dur=1.2))               # a long, slow drift
+    assert "too" in e.status.swipe_note
+
+
+def test_swipes_and_selects_do_nothing_outside_browse_mode():
     for e in (send(), receive()):
-        ev = run(e, swipe_movie((0.8, 0.5)) + [Seg(0.8, "pinch")])
-        assert not {"swipe", "pinch"} & set(kinds(ev))
+        ev = run(e, swipe_movie((0.8, 0.5)) + [Seg(0.8, "thumbs_up")])
+        assert not {"swipe", "select"} & set(kinds(ev))
 
 
 def test_a_small_or_edge_on_hand_keeps_a_sane_scale():
@@ -616,3 +713,135 @@ def test_a_throw_still_registers_through_the_smoother():
     for t, hands in render(FLICK_RIGHT):
         out.extend(e.update(sm.apply(hands, t), t))
     assert "throw" in kinds(out) and next(x for x in out if x.kind == "throw").detail == "right"
+
+
+# =========================================================== the hand coming back to neutral
+def stroke_and_return(engine, end, *, back, rest=0.6, tilt=0.0, pitch=0.0, wind=None, t0=100.0):
+    """swipe from the centre to `end` in 0.2 s, come back in `back` seconds, then rest."""
+    start, out, rng, t = (0.5, 0.5), [], random.Random(4), t0
+    legs = []
+    if wind is not None:
+        legs.append((start, wind[0], wind[1]))
+        legs.append((wind[0], start, 0.15))
+    legs += [(start, start, 0.4), (start, end, 0.2), (end, end, 0.08), (end, start, back), (start, start, rest)]
+    for a, b, d in legs:
+        n = max(1, round(d * 30))
+        for i in range(n):
+            f = (i + 1) / n
+            c = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+            t += 1 / 30
+            out.extend(engine.update([make_hand("open", center=c, tilt=tilt, pitch=pitch, noise=0.01, rng=rng)], t))
+    return [x.detail for x in out if x.kind == "swipe"], t
+
+
+@pytest.mark.parametrize("back", [0.15, 0.25, 0.4, 0.7, 1.0])
+@pytest.mark.parametrize("end,name", DIRECTIONS)
+def test_the_return_to_neutral_is_never_a_second_swipe(end, name, back):
+    swipes, _ = stroke_and_return(browse(), end, back=back)
+    assert swipes == [name]
+
+
+@pytest.mark.parametrize("tilt,pitch", TURNS)
+@pytest.mark.parametrize("end,name", DIRECTIONS)
+def test_return_strokes_are_ignored_at_every_hand_angle(end, name, tilt, pitch):
+    swipes, _ = stroke_and_return(browse(), end, back=0.3, tilt=tilt, pitch=pitch)
+    assert swipes == [name]
+
+
+@pytest.mark.parametrize("end,name,wind", [((0.5, 0.8), "down", ((0.5, 0.42), 0.15)),
+                                           ((0.5, 0.2), "up", ((0.5, 0.58), 0.15)),
+                                           ((0.8, 0.5), "right", ((0.42, 0.5), 0.15)),
+                                           ((0.2, 0.5), "left", ((0.58, 0.5), 0.15))])
+def test_a_small_wind_up_before_the_swipe_is_not_a_swipe(end, name, wind):
+    swipes, _ = stroke_and_return(browse(), end, back=0.3, wind=wind)
+    assert swipes == [name]
+
+
+def test_after_resting_a_deliberate_swipe_the_other_way_works_and_so_does_repeating():
+    e = browse()
+    s1, t = stroke_and_return(e, (0.5, 0.8), back=0.3)
+    assert s1 == ["down"]
+    s2, t = stroke_and_return(e, (0.5, 0.2), back=0.3, t0=t)           # now deliberately UP
+    assert s2 == ["up"]
+    s3, _ = stroke_and_return(e, (0.5, 0.2), back=0.3, t0=t)           # and UP again
+    assert s3 == ["up"]
+
+
+def test_a_swipe_after_a_swipe_without_resting_waits_for_neutral_or_the_timeout():
+    e = browse()
+    # down, then straight back up in one continuous motion with no pause: only the down counts
+    movie = [Seg(0.4, "open"), Seg(0.2, "open", start=(0.5, 0.5), end=(0.5, 0.8)),
+             Seg(0.2, "open", start=(0.5, 0.8), end=(0.5, 0.2)), Seg(0.3, "open", start=(0.5, 0.2))]
+    swipes = [x.detail for x in run(e, movie) if x.kind == "swipe"]
+    assert swipes == ["down"]
+    assert "returning" in e.status.swipe_note or swipes == ["down"]
+
+
+# =========================================================== thumbs up, more forgiving
+@pytest.mark.parametrize("rotation", [-40, -25, 0, 25, 40])
+def test_thumbs_up_is_seen_when_the_hand_is_rotated_in_the_picture(rotation):
+    hand = make_hand("thumbs_up", rotation=math.radians(rotation))
+    assert PoseClassifier(GestureConfig()).classify(hand).thumbs_up
+
+
+def test_thumbs_up_survives_jitter_and_a_slightly_bent_thumb():
+    rng, hits = random.Random(7), 0
+    for _ in range(60):
+        clf = PoseClassifier(GestureConfig())
+        hits += clf.classify(make_hand("thumbs_up", noise=0.03, rng=rng,
+                                       rotation=math.radians(rng.uniform(-25, 25)))).thumbs_up
+    assert hits >= 54                                                   # at least 90% of noisy frames
+
+
+def test_a_normal_fist_almost_never_looks_like_a_thumbs_up_and_never_selects():
+    rng, flicker = random.Random(8), 0
+    for _ in range(400):
+        flicker += PoseClassifier(GestureConfig()).classify(
+            make_hand("fist", noise=0.03, rng=rng, rotation=math.radians(rng.uniform(-40, 40)))).thumbs_up
+    assert flicker / 400 < 0.05                              # a rare single-frame flicker at most ...
+    for noise in (0.03, 0.05):                               # ... which the vote and the hold time absorb
+        ev = run(browse(), [Seg(0.4, "open"), Seg(4.0, "fist")], noise=noise, seed=11)
+        assert "select" not in kinds(ev), noise
+
+
+# =========================================================== neutral position, gaps, sharper sideways swipes
+@pytest.mark.parametrize("pause", [0.2, 0.4, 0.8])
+@pytest.mark.parametrize("end,name", DIRECTIONS)
+def test_pausing_at_the_end_of_the_stroke_does_not_unlock_the_return(end, name, pause):
+    """The hand rests at the far end for a moment, then goes back: still only one swipe."""
+    e, out, rng, t = browse(), [], random.Random(9), 100.0
+    for a, b, d in (((0.5, 0.5), (0.5, 0.5), 0.4), ((0.5, 0.5), end, 0.2), (end, end, pause),
+                    (end, (0.5, 0.5), 0.3 if pause < 0.6 else 0.5), ((0.5, 0.5), (0.5, 0.5), 0.5)):
+        for i in range(max(1, round(d * 30))):
+            f = (i + 1) / max(1, round(d * 30))
+            c = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+            t += 1 / 30
+            out.extend(e.update([make_hand("open", center=c, noise=0.01, rng=rng)], t))
+    assert [x.detail for x in out if x.kind == "swipe"] == [name]
+
+
+def test_staying_out_for_a_long_time_makes_that_the_new_neutral():
+    e = browse()
+    out = run(e, [Seg(0.4, "open"), Seg(0.2, "open", start=(0.5, 0.5), end=(0.5, 0.8)), Seg(2.8, "open", start=(0.5, 0.8))])
+    assert [x.detail for x in out if x.kind == "swipe"] == ["down"]
+    out = run(e, [Seg(0.2, "open", start=(0.5, 0.8), end=(0.5, 0.5)), Seg(0.4, "open", start=(0.5, 0.5))], t0=103.45)
+    assert [x.detail for x in out if x.kind == "swipe"] == ["up"]       # a deliberate swipe up from the new spot
+
+
+def test_two_swipes_are_never_closer_than_the_gap_even_the_same_way():
+    e = browse()
+    movie = [Seg(0.4, "open", start=(0.2, 0.5)), Seg(0.15, "open", start=(0.2, 0.5), end=(0.5, 0.5)),
+             Seg(0.05, "open", start=(0.5, 0.5), end=(0.5, 0.5)),
+             Seg(0.15, "open", start=(0.5, 0.5), end=(0.8, 0.5)), Seg(0.5, "open", start=(0.8, 0.5))]
+    assert [x.detail for x in run(e, movie) if x.kind == "swipe"] == ["right"]
+
+
+@pytest.mark.parametrize("dur", [0.08, 0.1, 0.15, 0.25])
+@pytest.mark.parametrize("end,name", [((0.74, 0.5), "right"), ((0.26, 0.5), "left")])
+def test_short_sharp_sideways_flicks_are_picked_up(end, name, dur):
+    assert turned_swipe(browse(), end, dur=dur) == [name]
+
+
+@pytest.mark.parametrize("rise", [0.0, 0.05, 0.10, -0.10])
+def test_a_rightward_swipe_that_arcs_up_or_down_is_still_right(rise):
+    assert turned_swipe(browse(), (0.78, 0.5 + rise)) == ["right"]

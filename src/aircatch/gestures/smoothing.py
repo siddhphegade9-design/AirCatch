@@ -43,10 +43,14 @@ class _HandFilter:
 
 
 class LandmarkSmoother:
-    """Smooths each followed hand separately. Hands are matched frame to frame by wrist position."""
+    """Smooths each followed hand separately. Hands are matched frame to frame by wrist position.
+
+    A hand that appears further away than `match_distance` in one frame is a different hand or a
+    tracking glitch: it starts a fresh filter, so the glitch stays ONE sudden jump (which the swipe
+    detector rejects) instead of being smeared into a fast, swipe-like slide."""
 
     def __init__(self, min_cutoff: float = 1.2, beta: float = 6.0, reset_after: float = 0.4,
-                 match_distance: float = 0.25) -> None:
+                 match_distance: float = 0.12) -> None:
         self._min_cutoff, self._beta = min_cutoff, beta
         self._reset_after, self._match = reset_after, match_distance
         self._filters: list[_HandFilter] = []

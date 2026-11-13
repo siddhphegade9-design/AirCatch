@@ -543,19 +543,19 @@ def ev(kind, **kw):
     return GestureEvent(kind, 1.0, **kw)
 
 
-def test_peace_sign_opens_the_explorer_and_swipes_move_pinch_picks_the_file(ctl, tmp_path):
+def test_peace_sign_opens_the_explorer_and_swipes_move_thumbs_up_picks_the_file(ctl, tmp_path):
     browse_tree(ctl, tmp_path)
     ctl.toggleCamera()                                                # the fake camera worker
     ctl._on_gestures([ev("browse_open")])
     assert ctl.browsing and ctl.browserTitle == "This computer" and ctl.browserCount == 1
-    ctl._on_gestures([ev("pinch")])                                   # Desk
+    ctl._on_gestures([ev("select")])                                   # Desk
     assert ctl.browserTitle.endswith("Desk") and ctl.browserCount == 3        # Sub, a.txt, b.txt
     ctl._on_gestures([ev("swipe", detail="down")])
     ctl._on_gestures([ev("swipe", detail="down")])
     assert ctl.browserIndex == 2
     ctl._on_gestures([ev("swipe", detail="up")])
     assert ctl.browserIndex == 1
-    ctl._on_gestures([ev("pinch")])                                   # a.txt
+    ctl._on_gestures([ev("select")])                                   # a.txt
     assert not ctl.browsing and ctl.hasFile and ctl.fileName == "a.txt"
     assert ctl._worker.mode == "send"                                 # back to the normal throw gestures
 
@@ -579,7 +579,7 @@ def test_swipe_right_enters_a_folder_and_left_goes_back(ctl, tmp_path):
 
 def test_peace_sign_closes_it_and_gestures_outside_the_explorer_are_ignored(ctl, tmp_path):
     browse_tree(ctl, tmp_path)
-    ctl._on_gestures([ev("swipe", detail="down"), ev("pinch")])      # explorer closed: nothing happens
+    ctl._on_gestures([ev("swipe", detail="down"), ev("select")])      # explorer closed: nothing happens
     assert not ctl.browsing and not ctl.hasFile
     ctl._on_gestures([ev("browse_open")])
     ctl._on_gestures([ev("browse_close")])
@@ -602,7 +602,7 @@ def test_an_incoming_file_closes_the_explorer(ctl, tmp_path):
     assert not ctl.browsing and ctl.receivePhase == "offered"
 
 
-def test_clicking_a_row_works_like_a_pinch(ctl, tmp_path):
+def test_clicking_a_row_works_like_a_thumbs_up(ctl, tmp_path):
     browse_tree(ctl, tmp_path)
     ctl.openBrowser()
     ctl.browserActivate(0)                                            # Desk

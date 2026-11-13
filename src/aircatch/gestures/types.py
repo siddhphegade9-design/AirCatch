@@ -65,7 +65,7 @@ EventKind = Literal[
     "browse_open",  # peace sign held in send mode: open the file explorer
     "browse_close", # peace sign held while browsing: close it
     "swipe",        # (browse) quick hand movement; detail = up / down / left / right
-    "pinch",        # (browse) thumb and index pinched and held: SELECT
+    "select",       # (browse) thumbs up held: SELECT
 ]
 
 
@@ -93,3 +93,5 @@ class EngineStatus:
     hint: str
     hand: HandObservation | None = None
     pinch: bool = False                      # is the hand pinching right now?
+    thumbs_up: bool = False                  # is the hand showing a thumbs up right now?
+    swipe_note: str = ""                      # why the last swipe attempt was or was not accepted

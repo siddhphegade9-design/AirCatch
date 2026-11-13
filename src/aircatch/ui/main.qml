@@ -47,6 +47,9 @@ Window {
         Text {
             id: lbl
             anchors.centerIn: parent
+            width: Math.min(implicitWidth, parent.width - 24)      // long labels (a long PC name) are cut with …
+            elide: Text.ElideRight
+            horizontalAlignment: Text.AlignHCenter
             text: parent.label
             color: parent.primary ? "#04101c" : "#d4e4ff"
             font.pixelSize: 13
@@ -518,7 +521,7 @@ Window {
 
                 Card {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 262
+                    Layout.preferredHeight: 220
                     title: "DEVICES"
                     ListView {
                         id: deviceList
@@ -544,8 +547,8 @@ Window {
                             }
                             Column {
                                 x: 30; anchors.verticalCenter: parent.verticalCenter
-                                Text { text: name; color: root.textColor; font.pixelSize: 13; font.weight: Font.DemiBold }
-                                Text { text: status + (address ? " · " + address : ""); color: root.mutedColor; font.pixelSize: 11 }
+                                Text { width: row.width - 112; elide: Text.ElideRight; text: name; color: root.textColor; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                Text { width: row.width - 112; elide: Text.ElideRight; text: status + (address ? " · " + address : ""); color: root.mutedColor; font.pixelSize: 11 }
                             }
                             Text {
                                 visible: paired && index === backend.selectedDevice
@@ -614,7 +617,7 @@ Window {
 
                 Card {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 156
+                    Layout.preferredHeight: 210
                     title: "FILE"
                     Row {
                         x: 16; y: 2
@@ -649,23 +652,35 @@ Window {
                         color: root.mutedColor
                         font.pixelSize: 12
                     }
-                    RowLayout {
+                    ColumnLayout {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                         anchors.margins: 16
                         spacing: 8
-                        Btn { label: "Choose file"; primary: false; onClicked: fileDialog.open() }
-                        Btn { label: "Browse ✌"; primary: false; onClicked: backend.openBrowser() }
-                        Btn {
+                        // row 1: the two ways to pick a file, side by side
+                        RowLayout {
                             Layout.fillWidth: true
-                            label: ["launched", "waiting", "sending"].indexOf(backend.senderPhase) >= 0 ? "Sending…"
-                                   : backend.selectedDeviceName ? "Send to " + backend.selectedDeviceName : "Send"
-                            active: backend.canSend
-                            onClicked: backend.sendSelected()
+                            spacing: 8
+                            Btn { Layout.fillWidth: true; Layout.preferredWidth: 100; label: "Choose file"; primary: false; onClicked: fileDialog.open() }
+                            Btn { Layout.fillWidth: true; Layout.preferredWidth: 100; label: "Browse ✌"; primary: false; onClicked: backend.openBrowser() }
                         }
-                        Btn {
-                            visible: ["launched", "waiting", "sending"].indexOf(backend.senderPhase) >= 0
-                            label: "Cancel"; primary: false
-                            onClicked: backend.cancelSend()
+                        // row 2: one long button for sending, so a long PC name still fits
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Btn {
+                                Layout.fillWidth: true; Layout.preferredWidth: 100
+                                implicitHeight: 40
+                                label: ["launched", "waiting", "sending"].indexOf(backend.senderPhase) >= 0 ? "Sending…"
+                                       : backend.selectedDeviceName ? "Send to " + backend.selectedDeviceName : "Send"
+                                active: backend.canSend
+                                onClicked: backend.sendSelected()
+                            }
+                            Btn {
+                                visible: ["launched", "waiting", "sending"].indexOf(backend.senderPhase) >= 0
+                                implicitHeight: 40
+                                label: "Cancel"; primary: false
+                                onClicked: backend.cancelSend()
+                            }
                         }
                     }
                 }
@@ -1216,7 +1231,7 @@ Window {
                 }
                 Text {
                     width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
-                    text: "Swipe ↑ ↓ move  ·  → open folder  ·  ← back  ·  pinch select  ·  ✌ close"
+                    text: "Swipe ↑ ↓ move  ·  → open folder  ·  ← back  ·  🤏 select  ·  ✌ close"
                     color: root.mutedColor; font.pixelSize: 12
                 }
                 Text {

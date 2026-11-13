@@ -504,7 +504,10 @@ class AppController(QObject):
 
     def _on_gesture_status(self, status) -> None:
         self._set("gestureState", status.state.replace("_", " ").upper())
-        self._set("gestureHint", status.hint)
+        hint = status.hint
+        if self._v["browsing"] and status.swipe_note:
+            hint = f"{hint}  ·  last swipe {status.swipe_note}"     # live tuning aid
+        self._set("gestureHint", hint)
         self._set("gestureProgress", round(status.progress, 2))
         self._set("handPresent", status.hand_present)
         if status.palm_center is not None and status.hand is not None:
@@ -558,7 +561,7 @@ class AppController(QObject):
             elif kind == "swipe" and self._v["browsing"]:
                 self._gesture_note(f"SWIPE {event.detail}")
                 self._browser_swipe(event.detail)
-            elif kind == "pinch" and self._v["browsing"]:
+            elif kind == "select" and self._v["browsing"]:
                 self._gesture_note("PINCH: select")
                 self.browserSelect()
             elif kind == "catch":

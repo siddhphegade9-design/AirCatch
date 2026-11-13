@@ -30,16 +30,61 @@ class GestureConfig:
     lost_grace: float = 0.5           # a hand may vanish this long (blur, glitch) without cancelling
     cooldown: float = 1.5             # quiet time after a throw or catch
     # --- browsing the file explorer (peace sign opens/closes, swipes move, pinch selects) ---
-    browse_hold: float = 0.5          # peace sign held this long opens / closes the explorer
+    browse_hold: float = 0.7          # peace sign held this long opens / closes the explorer
+    victory_curled_ratio: float = 1.15  # ring and pinky must be curled at least this much (a fist is about 0.8)
+    victory_spread: float = 0.30      # index and middle fingertips this far apart (palm lengths) = a V, not two fingers together
     browse_block: float = 0.8         # quiet time after opening / closing
-    swipe_speed: float = 3.0          # palm-lengths per second a swipe must reach
-    swipe_travel: float = 1.0         # palm-lengths the hand must cover
-    swipe_window: float = 0.3         # the travel must happen within this time
-    swipe_axis_share: float = 0.75    # how straight the swipe must be (share along its main axis)
-    swipe_repeat: float = 0.45        # wait before another swipe the same way
-    swipe_opposite_block: float = 1.0 # wait before a swipe the opposite way (the hand coming back)
-    pinch_on: float = 0.45            # thumb-to-index gap / palm length below this = pinching
-    pinch_off: float = 0.70           # above this = released (between the two keeps the old answer)
+    # --- swipes (file explorer). Distances are in palm lengths, speeds in palm lengths per second.
+    # Each stroke of the hand (speed up -> stop / turn back / leave the picture) is judged once, as a whole.
+    swipe_speed: float = 3.0          # a sideways stroke must reach this speed at its fastest
+    swipe_travel: float = 1.0         # ...and cover this distance, start to end
+    swipe_speed_vertical: float = 2.6 # up / down strokes are smaller and slower (a wrist flick)
+    swipe_travel_vertical: float = 0.8
+    swipe_axis_share: float = 0.8     # how straight: share of the movement along its axis (0.8 = within about 37 degrees)
+    swipe_axis_share_vertical: float = 0.8
+    swipe_start_speed: float = 1.2    # the hand moving faster than this starts a stroke
+    swipe_end_speed: float = 0.8      # ...slower than this ends it (and counts as resting)
+    swipe_end_share: float = 0.35     # ...or slower than this share of the stroke's top speed
+    swipe_end_time: float = 0.08      # ...for this long
+    swipe_core_time: float = 0.4      # the middle 80% of a swipe must take at most this long (moving the hand elsewhere is slower)
+    swipe_max_time: float = 1.0       # a stroke longer than this is judged anyway (a slow wave is not a swipe)
+    swipe_speed_window: float = 0.07  # speed is measured over this much time
+    swipe_max_jump: float = 0.7       # no single camera frame may account for more than this share of a swipe (tracking glitch)
+    swipe_gap: float = 0.30           # least time between two swipes, whatever the direction
+    # after a swipe the hand comes back; that stroke is never a swipe. The opposite way works again once
+    swipe_return_fraction: float = 0.5  # ...the hand is back at least this far towards where the swipe began, and rests
+    swipe_rest_time: float = 0.15       #    for this long,
+    swipe_return_settle: float = 0.35   # ...or it moved back at all and this long has passed since,
+    swipe_recentre: float = 2.5         # ...or it rested this long anywhere (it stayed out: that is the new start),
+    swipe_return_timeout: float = 3.0   # ...or this long has passed
+    swipe_dropout: float = 0.15       # the hand missing this long (blur) is a dropout ...
+    swipe_rejoin: float = 0.3         # ...a stroke is joined up again if the hand is back within this long
+    swipe_rejoin_long: float = 0.8    # ...a moving hand that blurred out of sight and is back elsewhere within this long: that move is the swipe
+    swipe_forget: float = 2.0         # hand gone this long: forget everything
+    swipe_exit_ease: float = 0.6      # a fast stroke that leaves the picture needs only this share of the distance
+    # old settings, no longer used (kept so old settings files still load)
+    swipe_right_ease: float = 1.0
+    swipe_window: float = 0.3
+    swipe_cross_limit: float = 0.5
+    swipe_repeat: float = 0.45
+    swipe_opposite_block: float = 0.7
+    swipe_return_hard: float = 1.2
+    swipe_return_window: float = 2.5
+    swipe_return_ratio: float = 1.0
+    swipe_neutral_radius: float = 1.5
+    swipe_rest_speed: float = 1.8
+    gesture_still_speed: float = 1.0  # pinch / peace sign only count while the hand moves slower than this (palm/s) ...
+    gesture_still_time: float = 0.3   # ...and has done for this long (a moving hand is swiping)
+    gesture_facing_min: float = 0.4   # ...and the palm faces the camera: knuckle width at least this share of palm length
+    select_hold: float = 0.5         # pinch held still this long = select
+    thumb_extend: float = 0.35        # thumb tip to index knuckle / palm length above this = thumb off the fist
+    thumb_straight: float = 0.75      # thumb end-to-end / its bone lengths above this = thumb straight (not tucked)
+    thumb_up_share: float = 0.4       # how much of the thumb's direction must point up (1 = straight up)
+    thumb_min_curled: int = 3         # fingers (of 4) that must be curled for a thumbs up
+    select_with_pinch: bool = True    # a pinch (thumb + index touching, other three fingers straight) selects
+    select_with_thumbs_up: bool = False  # also let a thumbs up select (off by default)
+    pinch_on: float = 0.50            # thumb-to-index gap / palm length below this = pinching
+    pinch_off: float = 0.80           # above this = released (between the two keeps the old answer)
     pinch_straight_fingers: int = 3   # middle, ring, pinky that must stay straight during a pinch
     pinch_hold: float = 0.3           # pinch held this long = select
     # --- the throw ---
@@ -53,7 +98,15 @@ class GestureConfig:
         positive = ("min_palm_size", "pose_window", "velocity_window", "arm_time", "grab_time",
                     "catch_hold", "open_confirm", "ready_timeout", "hold_timeout", "lost_grace",
                     "throw_window", "throw_speed", "browse_hold", "swipe_speed", "swipe_travel",
-                    "swipe_window", "pinch_on", "pinch_hold")
+                    "swipe_window", "pinch_on", "victory_spread", "victory_curled_ratio", "pinch_hold", "swipe_speed_vertical",
+                    "swipe_travel_vertical", "select_hold", "thumb_extend", "thumb_straight",
+                    "swipe_rest_speed", "swipe_rest_time", "swipe_return_timeout", "swipe_gap",
+                    "swipe_neutral_radius", "swipe_recentre", "swipe_right_ease", "swipe_return_hard",
+                    "swipe_return_window", "swipe_return_ratio", "swipe_cross_limit", "swipe_max_jump",
+                    "swipe_start_speed", "swipe_end_speed", "swipe_end_time", "swipe_max_time",
+                    "swipe_speed_window", "swipe_dropout", "swipe_rejoin", "swipe_forget",
+                    "swipe_exit_ease", "swipe_return_fraction", "swipe_core_time", "swipe_end_share", "swipe_return_settle",
+                    "gesture_still_speed", "gesture_still_time", "gesture_facing_min", "swipe_rejoin_long")
         for name in positive:
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be greater than 0")
@@ -63,8 +116,16 @@ class GestureConfig:
             raise ValueError("pinch_on must be above 0 and below pinch_off")
         if not 1 <= self.pinch_straight_fingers <= 3:
             raise ValueError("pinch_straight_fingers must be between 1 and 3")
-        if not 0.5 < self.swipe_axis_share <= 1:
-            raise ValueError("swipe_axis_share must be above 0.5 and at most 1")
+        if not 0.5 < self.swipe_axis_share <= 1 or not 0.5 < self.swipe_axis_share_vertical <= 1:
+            raise ValueError("swipe_axis_share settings must be above 0.5 and at most 1")
+        if self.swipe_end_speed >= self.swipe_start_speed:
+            raise ValueError("swipe_end_speed must be below swipe_start_speed")
+        if not 0 < self.swipe_exit_ease <= 1 or not 0 <= self.swipe_return_fraction <= 1:
+            raise ValueError("swipe_exit_ease must be in (0, 1] and swipe_return_fraction in [0, 1]")
+        if self.swipe_rejoin < self.swipe_dropout or self.swipe_forget < self.swipe_rejoin:
+            raise ValueError("need swipe_dropout <= swipe_rejoin <= swipe_forget")
+        if not 0 < self.thumb_up_share <= 1 or not 1 <= self.thumb_min_curled <= 4:
+            raise ValueError("thumb_up_share must be in (0, 1] and thumb_min_curled between 1 and 4")
         if not 0 < self.curled_ratio < self.extended_ratio:
             raise ValueError("curled_ratio must be above 0 and below extended_ratio")
         if not 1 <= self.open_min_fingers <= 4 or not 1 <= self.fist_min_curled <= 4:

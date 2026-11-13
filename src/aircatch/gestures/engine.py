@@ -7,8 +7,8 @@ transfer code can each be replaced without touching it.
 SEND mode      open palm (held) -> fist (held) = GRAB -> hand opens with a fast flick = THROW
 RECEIVE mode   fist (held) -> hand opens = CATCH (close your fist, then release it)
 IDLE mode      tracking and feedback only; no gesture events
-BROWSE mode    (file explorer open) quick open-palm swipes up/down/left/right move around; a pinch
-               (thumb + index touching, other fingers straight) selects. The peace sign (index +
+BROWSE mode    (file explorer open) quick swipes up/down/left/right move around; a pinch (thumb + index touching, the other three fingers
+               straight) selects. The peace sign (index +
                middle finger up) opens the explorer from send mode and closes it again.
 
 Why this does not misfire:
@@ -27,9 +27,10 @@ from collections import deque
 from typing import Sequence
 
 from aircatch.gestures.config import GestureConfig
-from aircatch.gestures.pose import PoseClassifier, PoseResult, palm_geometry
-from aircatch.gestures.types import (MODES, EngineStatus, EventKind, GestureEvent, HandObservation,
-                                     Pose)
+from aircatch.gestures.pose import PoseClassifier, PoseResult, hand_centroid, palm_geometry
+from aircatch.gestures.swipe import SwipeDetector
+from aircatch.gestures.types import (INDEX_MCP, MIDDLE_MCP, MODES, PINKY_MCP, WRIST, EngineStatus,
+                                     EventKind, GestureEvent, HandObservation, Pose)
 
 NO_HAND, IDLE, READY, HOLDING, CATCH_ARMED, COOLDOWN = (
     "no_hand", "idle", "ready", "holding", "catch_armed", "cooldown")
@@ -62,6 +63,7 @@ class GestureEngine:
         self._mode = mode
         self._return_mode = "send"          # where the peace sign takes you back to
         self._classifier = PoseClassifier(self.cfg)
+        self._swiper = SwipeDetector(self.cfg)   # survives a hand briefly lost (it must remember the return)
         self._full_reset()
 
     # ------------------------------------------------------------------ setup
@@ -87,14 +89,13 @@ class GestureEngine:
         self._cooldown_total = 0.0
         self._classifier.reset()
         # browsing
-        self._flag_hist: deque[tuple[float, bool, bool]] = deque()   # t, pinch, victory
-        self._pinch_now = self._victory_now = False
-        self._pinch_since = self._victory_since = 0.0
-        self._pinch_armed = False        # a pinch must be released before the next one counts
+        self._flag_hist: deque[tuple[float, bool, bool, bool]] = deque()   # t, pinch, victory, thumbs up
+        self._pinch_now = self._victory_now = self._thumb_now = False
+        self._pinch_since = self._victory_since = self._thumb_since = 0.0
+        self._select_armed = False       # a select must be released before the next one counts
+        self._moved_at = -1e9            # when the hand last moved (pinch / peace sign need it still)
         self._victory_armed = False      # the peace sign must be dropped before the next toggle
         self._toggle_until = 0.0
-        self._path: deque[tuple[float, float, float, float]] = deque()   # t, x, y, scale (swipes)
-        self._last_swipe: tuple[float, str] | None = None
 
     def _hand_gone(self) -> None:
         keep_cooldown = self._state == COOLDOWN
@@ -102,6 +103,11 @@ class GestureEngine:
         self._full_reset()
         if keep_cooldown:
             self._state, self._cooldown_until, self._cooldown_total = COOLDOWN, until, total
+
+    @property
+    def swipe_note(self) -> str:
+        """Why the last swipe attempt was (not) accepted, for tuning."""
+        return self._swiper.note
 
     @property
     def mode(self) -> str:
@@ -121,9 +127,8 @@ class GestureEngine:
         self._state = IDLE if self._hand_visible else NO_HAND
         # a hand that is already a fist when the mode changes must open before it can catch
         self._seen_non_fist = self._smoothed not in (Pose.FIST, Pose.NONE)
-        self._path.clear()
-        self._last_swipe = None
-        self._pinch_armed = False        # a pinch held across the switch does not count
+        self._swiper.reset()
+        self._select_armed = False       # a select held across the switch does not count
 
     # ------------------------------------------------------------------ main entry point
     def update(self, observations: Sequence[HandObservation], now: float) -> list[GestureEvent]:
@@ -136,6 +141,8 @@ class GestureEngine:
             self._hand = None
             self._result = None
             self._speed = 0.0
+            if self._mode == "browse":
+                self._emit_swipe(self._swiper.lost(now), events)
             if self._hand_visible:
                 if self._lost_since is None:
                     self._lost_since = now
@@ -158,12 +165,29 @@ class GestureEngine:
         cx, cy, size = palm_geometry(hand)
         self._last_center, self._last_size, self._last_seen = (cx, cy), size, now
         self._update_pose(self._result.pose, now)
-        self._update_flags(self._result.pinch, self._result.victory, now)
+        self._update_motion(cx, cy, size, now)
+        steady = self._steady(hand, now)
+        r = self._result
+        self._update_flags(r.pinch and steady, r.victory and steady, r.thumbs_up and steady, now)
         if self._smoothed not in (Pose.FIST, Pose.NONE):
             self._seen_non_fist = True
-        self._update_motion(cx, cy, size, now)
         self._step(now, events)
         return events
+
+    def _steady(self, hand: HandObservation, now: float) -> bool:
+        """Pinch and peace sign only count from a hand held still with the palm towards the camera.
+        A hand that is moving (a swipe) or turned edge-on has its fingers overlapping in the picture,
+        and MediaPipe then often 'sees' a pinch or a peace sign that is not there."""
+        cfg = self.cfg
+        if self._speed > cfg.gesture_still_speed:          # palm centre: curling fingers do not move it
+            self._moved_at = now
+        if now - self._moved_at < cfg.gesture_still_time:
+            return False
+        a, lm = hand.aspect, hand.landmarks
+        w, m, i, k = lm[WRIST], lm[MIDDLE_MCP], lm[INDEX_MCP], lm[PINKY_MCP]
+        length = math.hypot((w[0] - m[0]) * a, w[1] - m[1])
+        width = math.hypot((i[0] - k[0]) * a, i[1] - k[1])
+        return width >= cfg.gesture_facing_min * max(length, 1e-6)
 
     # ------------------------------------------------------------------ hand selection
     def _select_hand(self, observations: Sequence[HandObservation], now: float) -> HandObservation | None:
@@ -198,15 +222,18 @@ class GestureEngine:
         elif top != self._smoothed and counts[top] / len(hist) >= self.cfg.pose_majority:
             self._smoothed, self._pose_since = top, now
 
-    def _update_flags(self, pinch: bool, victory: bool, now: float) -> None:
+    def _update_flags(self, pinch: bool, victory: bool, thumb: bool, now: float) -> None:
         """Vote over the same short window as the pose, so a single glitchy frame changes nothing."""
         hist = self._flag_hist
-        hist.append((now, pinch, victory))
+        hist.append((now, pinch, victory, thumb))
         while hist and now - hist[0][0] > self.cfg.pose_window:
             hist.popleft()
         n = len(hist)
-        pinch_now = sum(1 for _, p, _v in hist if p) / n >= self.cfg.pose_majority
-        victory_now = sum(1 for _, _p, v in hist if v) / n >= self.cfg.pose_majority
+        pinch_now = sum(1 for _, p, _v, _t in hist if p) / n >= self.cfg.pose_majority
+        victory_now = sum(1 for _, _p, v, _t in hist if v) / n >= self.cfg.pose_majority
+        thumb_now = sum(1 for *_, t in hist if t) / n >= self.cfg.pose_majority
+        if thumb_now != self._thumb_now:
+            self._thumb_now, self._thumb_since = thumb_now, now
         if pinch_now != self._pinch_now:
             self._pinch_now, self._pinch_since = pinch_now, now
         if victory_now != self._victory_now:
@@ -229,10 +256,6 @@ class GestureEngine:
             self._speed = mag / mean_size if mean_size > 1e-9 else 0.0
             ux, uy = (vx / mag, vy / mag) if mag > 1e-9 else (0.0, 0.0)
         self._speeds.append((now, self._speed, ux, uy))
-        path = self._path
-        path.append((now, cx, cy, size))
-        while len(path) > 1 and now - path[0][0] > self.cfg.swipe_window:
-            path.popleft()
         horizon = max(2 * self.cfg.throw_window, 2.0)
         while self._speeds and now - self._speeds[0][0] > horizon:
             self._speeds.popleft()
@@ -303,38 +326,42 @@ class GestureEngine:
         self._toggle_until = now + self.cfg.browse_block
         return True
 
+    def _selecting(self) -> tuple[bool, float]:
+        """Is a select gesture (pinch, and a thumbs up if enabled) shown, and since when?"""
+        if self.cfg.select_with_pinch and self._pinch_now:
+            return True, self._pinch_since
+        if self.cfg.select_with_thumbs_up and self._thumb_now:
+            return True, self._thumb_since
+        return False, 0.0
+
+    def _select_forming(self) -> bool:
+        raw, cfg = self._result, self.cfg
+        if self._last_seen - self._moved_at < cfg.gesture_still_time:
+            return False                 # a hand on the move is swiping, whatever shape it seems to have
+        return raw is not None and ((cfg.select_with_pinch and raw.pinch)
+                                    or (cfg.select_with_thumbs_up and raw.thumbs_up))
+
     def _browse_step(self, now: float, events: list[GestureEvent]) -> None:
         cfg = self.cfg
-        if self._pinch_now:                                # pinching: select, and never swipe
-            if self._pinch_armed and now - self._pinch_since >= cfg.pinch_hold:
-                events.append(GestureEvent("pinch", now))
-                self._pinch_armed = False
-                self._path.clear()
+        selecting, since = self._selecting()
+        if selecting:                                      # a select: never also a swipe
+            self._swiper.abort()
+            if self._select_armed and now - since >= cfg.select_hold:
+                events.append(GestureEvent("select", now))
+                self._select_armed = False
             return
-        self._pinch_armed = True
-        if self._smoothed != Pose.OPEN or len(self._path) < 2:
+        self._select_armed = True
+        if self._select_forming() or self._victory_now:    # another gesture is forming: not a swipe
+            self._swiper.abort()
             return
-        if self._result is not None and self._result.pinch:       # a pinch is forming: not a swipe
-            self._path.clear()
-            return
-        t0, x0, y0, _ = self._path[0]
-        scale = sum(p[3] for p in self._path) / len(self._path)
-        dx, dy = (self._path[-1][1] - x0) / scale, (self._path[-1][2] - y0) / scale
-        dist, dt = math.hypot(dx, dy), now - t0
-        if dist < cfg.swipe_travel or dt < 0.05 or dist / dt < cfg.swipe_speed:
-            return
-        if max(abs(dx), abs(dy)) / dist < cfg.swipe_axis_share:
-            return                                         # too diagonal to call
-        name = _direction_name(dx, dy)
-        if self._last_swipe is not None:
-            when, last = self._last_swipe
-            wait = cfg.swipe_repeat if last == name else cfg.swipe_opposite_block
-            if now - when < wait:                          # also swallows the hand coming back
-                return
-        events.append(GestureEvent("swipe", now, speed=dist / dt, direction=(dx / dist, dy / dist),
-                                   detail=name))
-        self._last_swipe = (now, name)
-        self._path.clear()
+        hx, hy = hand_centroid(self._hand)
+        self._swiper.aspect = self._hand.aspect
+        self._emit_swipe(self._swiper.update(hx, hy, self._last_size, now), events)
+
+    def _emit_swipe(self, swipe, events: list[GestureEvent]) -> None:
+        if swipe is not None:
+            events.append(GestureEvent("swipe", swipe.time, speed=swipe.speed, direction=swipe.unit,
+                                       detail=swipe.direction))
 
     def _release(self, now: float, events: list[GestureEvent]) -> None:
         """The hand opened while holding: was it a throw or a gentle drop?"""
@@ -366,8 +393,9 @@ class GestureEngine:
             left = max(0.0, self._cooldown_until - self._last_seen) if self._last_seen > 0 else self.cfg.cooldown
             progress = 1 - left / self._cooldown_total if self._cooldown_total else 1.0
         elif self._hand is not None and self._mode == "browse":
-            if self._pinch_now:
-                progress = min(1.0, (self._last_seen - self._pinch_since) / cfg.pinch_hold)
+            selecting, since = self._selecting()
+            if selecting:
+                progress = min(1.0, (self._last_seen - since) / cfg.select_hold)
             elif self._victory_now:
                 progress = min(1.0, (self._last_seen - self._victory_since) / cfg.browse_hold)
         elif self._hand is not None and self._mode != "idle":
@@ -396,4 +424,5 @@ class GestureEngine:
             fingers=result.fingers if result else (False, False, False, False),
             hand_present=self._hand is not None, progress=progress, cooldown_left=left,
             speed=self._speed, palm_center=self._last_center if self._hand is not None else None,
-            hint=hint, hand=self._hand, pinch=self._pinch_now and self._hand is not None)
+            hint=hint, hand=self._hand, pinch=self._pinch_now and self._hand is not None,
+            thumbs_up=self._thumb_now and self._hand is not None, swipe_note=self.swipe_note)

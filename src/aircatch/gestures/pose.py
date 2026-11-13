@@ -5,8 +5,9 @@ import math
 from dataclasses import dataclass
 
 from aircatch.gestures.config import GestureConfig
-from aircatch.gestures.types import (FINGERS, INDEX_MCP, INDEX_TIP, MIDDLE_MCP, PALM_POINTS,
-                                     PINKY_MCP, THUMB_TIP, WRIST, HandObservation, Point, Pose)
+from aircatch.gestures.types import (FINGERS, INDEX_MCP, INDEX_TIP, MIDDLE_MCP, MIDDLE_TIP, PALM_POINTS,
+                                     PINKY_MCP, THUMB_CMC, THUMB_IP, THUMB_MCP, THUMB_TIP, WRIST, HandObservation, Point,
+                                     Pose)
 
 
 def _dist(a: Point, b: Point) -> float:
@@ -40,6 +41,14 @@ def palm_geometry(hand: HandObservation) -> tuple[float, float, float]:
     return cx, cy, max(length, 1.35 * width)
 
 
+def hand_centroid(hand: HandObservation) -> tuple[float, float]:
+    """Average of all 21 points (image-height units). Unlike the palm centre it follows the fingers,
+    so a wrist flick with the palm barely moving still counts as movement."""
+    a = hand.aspect
+    n = len(hand.landmarks)
+    return (sum(p[0] for p in hand.landmarks) / n * a, sum(p[1] for p in hand.landmarks) / n)
+
+
 @dataclass(frozen=True)
 class PoseResult:
     pose: Pose
@@ -48,6 +57,7 @@ class PoseResult:
     thumb_out: bool
     pinch: bool = False       # thumb tip touching index tip, middle/ring/pinky straight
     victory: bool = False     # index and middle stretched, ring and pinky curled (peace sign)
+    thumbs_up: bool = False   # fist with the thumb stuck out and pointing up
 
 
 class PoseClassifier:
@@ -102,5 +112,25 @@ class PoseClassifier:
                 self._pinching = False
         else:
             self._pinching = False
-        victory = flags[0] and flags[1] and not flags[2] and not flags[3]
-        return PoseResult(pose, tuple(flags), tuple(ratios), thumb_out, self._pinching, victory)
+        # peace sign: strict. Index and middle stretched AND spread into a V, ring and pinky clearly curled
+        victory = (flags[0] and flags[1] and ratios[2] <= self._cfg.victory_curled_ratio
+                   and ratios[3] <= self._cfg.victory_curled_ratio and palm > 1e-9
+                   and _dist(pts[INDEX_TIP], pts[MIDDLE_TIP]) / palm >= self._cfg.victory_spread)
+        return PoseResult(pose, tuple(flags), tuple(ratios), thumb_out, self._pinching, victory,
+                          self._thumbs_up(hand, pts, palm, curled))
+
+    def _thumbs_up(self, hand: HandObservation, pts: list[Point], palm: float, curled: int) -> bool:
+        """Four fingers curled, thumb clearly out and pointing up the picture."""
+        if curled < self._cfg.thumb_min_curled or palm <= 1e-9:
+            return False
+        if _dist(pts[THUMB_TIP], pts[INDEX_MCP]) / palm < self._cfg.thumb_extend:
+            return False                                   # thumb lying on the fist
+        chain = (THUMB_CMC, THUMB_MCP, THUMB_IP, THUMB_TIP)
+        bones = sum(_dist(pts[a], pts[b]) for a, b in zip(chain, chain[1:]))
+        if bones < 1e-9 or _dist(pts[THUMB_CMC], pts[THUMB_TIP]) / bones < self._cfg.thumb_straight:
+            return False                                   # a bent thumb is tucked in, not stuck out
+        a = hand.aspect
+        (x1, y1, _), (x2, y2, _) = hand.landmarks[THUMB_CMC], hand.landmarks[THUMB_TIP]   # base to tip: steadier
+        dx, dy = (x2 - x1) * a, y2 - y1                    # image y grows downwards
+        length = math.hypot(dx, dy)
+        return length > 1e-9 and -dy / length >= self._cfg.thumb_up_share
