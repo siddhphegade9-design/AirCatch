@@ -65,6 +65,7 @@ class SwipeDetector:
         self._last_xy: tuple[float, float] | None = None
         self._found_at = -1e9
         self._frame_dt = 1 / 30
+        self._steps: deque[float] = deque(maxlen=15)
         self._last_speed = 0.0
         self._vanish = None            # (time, position, scale, was moving) when the hand last went missing
         self._last_fire = -1e9
@@ -132,12 +133,18 @@ class SwipeDetector:
                 if vanish is not None and gap <= cfg.swipe_rejoin_long:
                     jump = vanish                    # it was moving and blurred out of sight: judge the jump
                 elif self._last_seen is not None and vanish is not None:
-                    self._after_absence(vanish, x, y)
+                    absent = self._after_absence(vanish, x, y, now)
+                    if absent is not None:
+                        self._last_seen, self._last_xy, self._found_at = now, (x, y), now
+                        self._hist.append((now, x, y))
+                        self._trail.append((now, x, y))
+                        return absent
                 if self._state != STROKE:
                     self._found_at = now             # really (re)entered the picture, not just a blurred frame
         if self._last_seen is not None and not reappeared:
-            step = now - self._last_seen                # how often frames come (webcams vary: 15-60 fps)
-            self._frame_dt = 0.9 * self._frame_dt + 0.1 * min(step, 0.2)
+            self._steps.append(now - self._last_seen)   # how often frames come (webcams vary: 15-60 fps);
+            ordered = sorted(self._steps)               # the median, so a few missed frames do not count
+            self._frame_dt = ordered[len(ordered) // 2]
         if jump is not None:
             out = self._judge_jump(jump, x, y, now)
             self._last_seen, self._last_xy = now, (x, y)
@@ -256,26 +263,55 @@ class SwipeDetector:
             return None
         # (only a stroke that got this far quickly: a long unhurried move, like lowering the hand, is left
         # for the end of the stroke, where its duration is judged)
-        if t0 < self._found_at + 0.1 or now - t0 > 0.75 * cfg.swipe_core_time or now - self._last_fire < cfg.swipe_gap:
+        if t0 < self._found_at + 0.1 or now - self._last_fire < cfg.swipe_gap:
+            return None
+        ux, uy = dx / dist, dy / dist
+        going = next((t for t, px, py in pts                      # when it really got going (10% of the way)
+                      if ((px - x0) * ux + (py - y0) * uy) / scale >= 0.1 * dist), t0)
+        if now - going > 0.75 * cfg.swipe_core_time:
             return None
         steps = [math.hypot(b[1] - a[1], b[2] - a[2]) / scale for a, b in zip(pts, pts[1:])]
         if max(steps) > cfg.swipe_max_jump * dist and sum(steps) - max(steps) < 0.2 * dist:
             return None                                     # could be a tracking jump: wait and see
-        ux, uy = dx / dist, dy / dist
         self._fired, self._last_fire = True, now
         self._ret, self._ret_since, self._ret_back = (x0, y0, ux, uy, dist), now, 0.0
         self._ret_moved = False
         self.note = f"{name}: ok"
         return Swipe(name, now, self._peak, (ux, uy), dist)
 
-    def _after_absence(self, vanish, x: float, y: float) -> None:
-        """Back after a long absence somewhere else: do not let the way back from there count."""
+    def _after_absence(self, vanish, x: float, y: float, now: float) -> Swipe | None:
+        """Back after a longer absence, somewhere else.
+
+        If it vanished in the middle of the picture and comes back in at an edge, it swiped out of the
+        picture that way, too fast for the camera (a hand that is simply taken away is followed all the
+        way to the edge, and vanishes there). Either way, the way back from there does not count."""
+        cfg = self.cfg
         _, (vx0, vy0), scale, _ = vanish
         dx, dy = (x - vx0) / scale, (y - vy0) / scale
         dist = math.hypot(dx, dy)
-        if dist >= 0.6:
-            self._ret, self._ret_since, self._ret_back = (vx0, vy0, dx / dist, dy / dist, dist), self._last_seen or 0.0, 0.0
-            self._ret_moved = False
+        if dist < 0.6:
+            return None
+        ux, uy = dx / dist, dy / dist
+        name = _name(dx, dy)
+        if self._ret is not None:
+            along = ux * self._ret[2] + uy * self._ret[3]
+            if along < -0.35:
+                return None                                 # still on its way back from the last swipe
+            if along > 0.5:
+                return None                                 # the swipe that took it out was already counted
+        vertical = name in ("up", "down")
+        share_min = cfg.swipe_axis_share_vertical if vertical else cfg.swipe_axis_share
+        mid_picture = min(vx0, self.aspect - vx0, vy0, 1 - vy0) / scale >= cfg.swipe_exit_reach * 0.6
+        room = {"right": self.aspect - x, "left": x, "up": y, "down": 1 - y}[name] / scale
+        fire = (mid_picture and room <= cfg.swipe_exit_reach and max(abs(dx), abs(dy)) / dist >= share_min
+                and now - self._last_fire >= cfg.swipe_gap)
+        self._ret, self._ret_since, self._ret_back = (vx0, vy0, ux, uy, dist), now, 0.0
+        self._ret_moved = False
+        if not fire:
+            return None
+        self._last_fire = now
+        self.note = f"{name}: ok (swiped out of the picture)"
+        return Swipe(name, now, self._peak, (ux, uy), dist)
 
     def _begin(self, scale: float, speed: float, vx: float, vy: float) -> None:
         """A stroke starts. Walk back through the last moments to where the hand started moving this way."""
@@ -379,6 +415,13 @@ class SwipeDetector:
                 if cfg.swipe_return_instant and self._ret_back >= cfg.swipe_return_fraction * self._ret[4]:
                     self._ret = None                        # it has come back: anything goes again
                 return None
+            if back <= -0.7 and not self._ret_moved and t0 - self._last_fire < 0.3:
+                sx, sy = self._ret[0], self._ret[1]
+                gone = ((x0 - sx) * rx + (y0 - sy) * ry) / scale
+                if gone > 0.5 * self._ret[4]:
+                    # the same way again from out there, straight after it counted: still the same swipe
+                    self.note = f"{name}: ignored (same swipe continuing)"
+                    return None
             if back > -0.7 and not self._stroke_rested and not self._ret_moved:
                 # sideways straight after a swipe, before coming back at all: only counts from a pause
                 self.note = f"{name}: ignored (pause before a new direction)"

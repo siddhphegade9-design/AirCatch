@@ -31,7 +31,7 @@ Every gesture also has a button fallback in the app (Milestone 6). The explorer 
   cannot turn "down" into "left".
 * A swipe needs: distance `swipe_travel` (1.0 palm sideways) / `swipe_travel_vertical` (0.8), top speed `swipe_speed`
   (3.0 palm/s) / `swipe_speed_vertical` (2.6), within about 37 degrees of its axis (`swipe_axis_share` 0.8), and its
-  middle 80% done within `swipe_core_time` (0.4 s), so moving your hand to a new spot is not a swipe.
+  middle 80% done within `swipe_core_time` (0.33 s), so moving your hand to a new spot is not a swipe.
 * Cooldown for the way back: after a swipe, the next stroke back the way it came is "the return" and never a swipe,
   however fast. The cooldown ends when the hand has come back and paused (`swipe_rest_time` 0.15 s) or
   `swipe_return_settle` (0.35 s) after coming back, or after resting `swipe_recentre` (2.5 s) anywhere. Swiping the same way
@@ -45,9 +45,17 @@ Every gesture also has a button fallback in the app (Milestone 6). The explorer 
 * A stroke that vanishes within `swipe_exit_reach` (1.5 palms) of the side or top edge it was heading for needs only
   `swipe_exit_travel` (0.4 palm): the hand swiped out of the picture. Not downwards (lowering the hand to rest).
 * A command given straight after a swipe, before the hand came back or paused, is ignored, and so is its way back.
+* A hand that vanished in the middle of the picture and comes back in at an edge swiped out that way, too fast for
+  the camera: that counts (a hand simply taken away is followed to the edge and vanishes there). A swipe out of the
+  picture is counted once, not again when the hand comes back in.
 * Motion blur: a webcam often loses the hand during the fast part of a swipe. If the hand vanishes and is back
   somewhere else within `swipe_rejoin_long` (0.8 s), that jump is judged as the swipe (and its return gets the cooldown).
-* Select = pinch held still for `select_hold` (0.5 s).
+* Select = pinch held for `select_hold` (0.4 s; about half a second in all, counting the moment it takes to be
+  recognised). Made for real cameras: it starts when the thumb and index tips meet with at least
+  `pinch_straight_fingers` (2) of the other three fingers straight, and then carries on until the tips clearly part,
+  even if the tracker misreads a finger. It may flicker off for up to `select_grace` (0.25 s) without starting again.
+  The palm must stay within `select_drift` (0.5 palm) of where the pinch began (a hand being moved about is not
+  selecting). After a select, let go for `select_release` (0.5 s) before the next one.
 * Pinch and peace sign only count while the hand is held still (`gesture_still_speed`, `gesture_still_time`) with
   the palm towards the camera (`gesture_facing_min`). A hand turned edge-on while swiping often LOOKS like a pinch or a
   peace sign to MediaPipe (fingers overlapping); before this rule that fired selects and cancelled the swipe, and the

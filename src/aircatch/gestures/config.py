@@ -49,7 +49,7 @@ class GestureConfig:
     swipe_return_instant: bool = True # the cooldown ends as soon as the hand has come back far enough (else: after a pause)
     swipe_side_protect: bool = True   # a command given too soon after a swipe is ignored, and so is its way back
     swipe_end_time: float = 0.08      # ...for this long
-    swipe_core_time: float = 0.4      # the middle 80% of a swipe must take at most this long (moving the hand elsewhere is slower)
+    swipe_core_time: float = 0.33     # the middle 80% of a swipe must take at most this long (moving the hand elsewhere is slower)
     swipe_max_time: float = 1.0       # a stroke longer than this is judged anyway (a slow wave is not a swipe)
     swipe_speed_window: float = 0.07  # speed is measured over this much time
     swipe_max_jump: float = 0.7       # no single camera frame may account for more than this share of a swipe (tracking glitch)
@@ -79,10 +79,10 @@ class GestureConfig:
     swipe_return_ratio: float = 1.0
     swipe_neutral_radius: float = 1.5
     swipe_rest_speed: float = 1.8
-    gesture_still_speed: float = 1.0  # pinch / peace sign only count while the hand moves slower than this (palm/s) ...
-    gesture_still_time: float = 0.3   # ...and has done for this long (a moving hand is swiping)
+    gesture_still_speed: float = 1.6  # pinch / peace sign only count while the hand moves slower than this (palm/s) ...
+    gesture_still_time: float = 0.2   # ...and has done for this long (a moving hand is swiping)
     gesture_facing_min: float = 0.4   # ...and the palm faces the camera: knuckle width at least this share of palm length
-    select_hold: float = 0.5         # pinch held still this long = select
+    select_hold: float = 0.4         # pinch held still this long = select
     thumb_extend: float = 0.35        # thumb tip to index knuckle / palm length above this = thumb off the fist
     thumb_straight: float = 0.75      # thumb end-to-end / its bone lengths above this = thumb straight (not tucked)
     thumb_up_share: float = 0.4       # how much of the thumb's direction must point up (1 = straight up)
@@ -90,8 +90,12 @@ class GestureConfig:
     select_with_pinch: bool = True    # a pinch (thumb + index touching, other three fingers straight) selects
     select_with_thumbs_up: bool = False  # also let a thumbs up select (off by default)
     pinch_on: float = 0.50            # thumb-to-index gap / palm length below this = pinching
-    pinch_off: float = 0.80           # above this = released (between the two keeps the old answer)
-    pinch_straight_fingers: int = 3   # middle, ring, pinky that must stay straight during a pinch
+    pinch_off: float = 0.85           # above this = released (between the two keeps the old answer)
+    pinch_straight_fingers: int = 2   # how many of middle, ring, pinky must be straight to START a pinch
+    pinch_keep_fingers: int = 1       # ...and to keep it (the tracker often misreads one finger for a moment)
+    select_drift: float = 0.5         # ...and the palm must stay within this many palm lengths of where the pinch began
+    select_release: float = 0.5       # after a select the pinch must be let go this long before it can select again
+    select_grace: float = 0.25        # the pinch may flicker off for this long without the hold starting again
     pinch_hold: float = 0.3           # pinch held this long = select
     # --- the throw ---
     throw_window: float = 0.4         # look this far back from the release for the fastest movement
@@ -121,8 +125,10 @@ class GestureConfig:
             raise ValueError("cooldown and block times cannot be negative")
         if not 0 < self.pinch_on < self.pinch_off:
             raise ValueError("pinch_on must be above 0 and below pinch_off")
-        if not 1 <= self.pinch_straight_fingers <= 3:
-            raise ValueError("pinch_straight_fingers must be between 1 and 3")
+        if not 1 <= self.pinch_straight_fingers <= 3 or not 0 <= self.pinch_keep_fingers <= self.pinch_straight_fingers:
+            raise ValueError("pinch_straight_fingers must be 1..3 and pinch_keep_fingers at most that")
+        if self.select_grace < 0:
+            raise ValueError("select_grace cannot be negative")
         if not 0.5 < self.swipe_axis_share <= 1 or not 0.5 < self.swipe_axis_share_vertical <= 1:
             raise ValueError("swipe_axis_share settings must be above 0.5 and at most 1")
         if self.swipe_end_speed >= self.swipe_start_speed:

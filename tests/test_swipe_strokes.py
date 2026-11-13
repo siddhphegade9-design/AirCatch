@@ -229,3 +229,44 @@ def test_lowering_the_hand_slowly_out_of_the_picture_is_not_a_swipe_down():
     rig.line((0.5, 1.2), 2.5)
     rig.hold(1.0)
     assert rig.swipes() == []
+
+
+@pytest.mark.parametrize("fps", [30, 45, 60])
+def test_moving_the_hand_about_without_pausing_is_not_a_swipe(fps):
+    """Back-to-back moves to new spots, each taking about 0.8 s (a swipe's main part takes under a third of a second)."""
+    r = random.Random(11)
+    rig = Rig(fps=fps)
+    rig.hold(0.5)
+    for _ in range(40):
+        rig.line((0.5 + r.uniform(-0.15, 0.15) / ASPECT, 0.5 + r.uniform(-0.15, 0.15)), r.uniform(0.7, 0.95))
+    assert rig.swipes() == []
+
+
+@pytest.mark.parametrize("fps", [30, 45, 60])
+@pytest.mark.parametrize("dirn,start", [("right", (0.8, 0.5)), ("left", (0.2, 0.5)), ("up", (0.5, 0.25))])
+def test_a_swipe_out_of_the_picture_counts_once_not_again_when_the_hand_comes_back_in(dirn, start, fps):
+    rig = Rig(fps=fps)
+    rig.pos = start
+    rig.hold(0.5)
+    rig.line(target(start, dirn, 2.6), 0.3)
+    rig.hold(0.6)                                       # out of view
+    rig.line(start, 0.5)
+    rig.hold(0.8)
+    assert rig.swipes() == [dirn]
+
+
+@pytest.mark.parametrize("fps", [30, 45, 60])
+def test_every_direction_at_every_camera_speed(fps):
+    r = random.Random(fps)
+    for seed in range(25):
+        rig = Rig(fps=fps, seed=seed)
+        rig.hold(0.5)
+        want = []
+        for _ in range(8):
+            dirn = r.choice(list(DIRS))
+            want.append(dirn)
+            rig.line(target(rig.pos, dirn, r.uniform(1.3, 2.4)), r.uniform(0.15, 0.32))
+            rig.hold(r.choice([0.0, 0.1, 0.25]))
+            rig.line((0.5 + r.uniform(-0.3, 0.3) * 0.2 / ASPECT, 0.5 + r.uniform(-0.3, 0.3) * 0.2), r.uniform(0.25, 0.5))
+            rig.hold(r.uniform(0.25, 0.5))
+        assert rig.swipes() == want, (fps, seed)

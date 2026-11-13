@@ -105,12 +105,11 @@ class PoseClassifier:
         # pinch: measured in 3D (turning-proof), as a fraction of the palm length, with hysteresis
         pinch_gap = _dist(pts[THUMB_TIP], pts[INDEX_TIP]) / palm if palm > 1e-9 else 9.0
         straight = sum(flags[1:])                       # middle, ring, pinky
-        if straight >= self._cfg.pinch_straight_fingers:
-            if pinch_gap <= self._cfg.pinch_on:
-                self._pinching = True
-            elif pinch_gap >= self._cfg.pinch_off:
-                self._pinching = False
-        else:
+        # To start: enough of the other fingers straight and the tips together. Once pinching, it only ends
+        # when the tips clearly part or the hand closes (the tracker often misreads one finger for a frame).
+        if not self._pinching:
+            self._pinching = straight >= self._cfg.pinch_straight_fingers and pinch_gap <= self._cfg.pinch_on
+        elif pinch_gap >= self._cfg.pinch_off or straight < self._cfg.pinch_keep_fingers:
             self._pinching = False
         # peace sign: strict. Index and middle stretched AND spread into a V, ring and pinky clearly curled
         victory = (flags[0] and flags[1] and ratios[2] <= self._cfg.victory_curled_ratio

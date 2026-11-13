@@ -93,6 +93,9 @@ class GestureEngine:
         self._pinch_now = self._victory_now = self._thumb_now = False
         self._pinch_since = self._victory_since = self._thumb_since = 0.0
         self._select_armed = False       # a select must be released before the next one counts
+        self._sel_start: float | None = None   # when the select hold began (survives short flickers)
+        self._sel_last = 0.0
+        self._sel_at = (0.0, 0.0)              # where the palm was when the hold began
         self._moved_at = -1e9            # when the hand last moved (pinch / peace sign need it still)
         self._victory_armed = False      # the peace sign must be dropped before the next toggle
         self._toggle_until = 0.0
@@ -346,11 +349,23 @@ class GestureEngine:
         selecting, since = self._selecting()
         if selecting:                                      # a select: never also a swipe
             self._swiper.abort()
-            if self._select_armed and now - since >= cfg.select_hold:
+            _, cx, cy, size = self._motion[-1]
+            if self._sel_start is None:
+                self._sel_start, self._sel_at = since, (cx, cy)
+            elif math.hypot(cx - self._sel_at[0], cy - self._sel_at[1]) > cfg.select_drift * size:
+                # the hand has wandered off since the pinch began: it is being moved, not held. Start again here.
+                self._sel_start, self._sel_at = now, (cx, cy)
+            self._sel_last = now
+            if self._select_armed and now - self._sel_start >= cfg.select_hold:
                 events.append(GestureEvent("select", now))
                 self._select_armed = False
             return
-        self._select_armed = True
+        if self._sel_start is not None:
+            if now - self._sel_last <= cfg.select_grace:
+                return                                     # flickered off for a moment: the hold carries on
+            self._sel_start = None
+        if now - self._sel_last >= cfg.select_release:
+            self._select_armed = True                      # properly released: the next pinch can select
         if self._select_forming() or self._victory_now:    # another gesture is forming: not a swipe
             self._swiper.abort()
             return
