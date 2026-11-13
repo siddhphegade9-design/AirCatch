@@ -1177,8 +1177,13 @@ Window {
                 clip: true
                 model: backend.browserModel
                 currentIndex: backend.browserIndex
-                highlightMoveDuration: root.d(120)
-                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+                // glide to the selected row (keeping a row of context above and below) instead of jumping
+                highlightFollowsCurrentItem: true
+                highlightRangeMode: ListView.ApplyRange
+                preferredHighlightBegin: 46
+                preferredHighlightEnd: Math.max(92, height - 92)
+                highlightMoveDuration: root.d(140)
+                highlightMoveVelocity: -1
                 delegate: Rectangle {
                     width: rows.width; height: 46; radius: 11
                     readonly property bool active: index === backend.browserIndex

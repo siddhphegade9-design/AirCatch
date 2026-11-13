@@ -45,6 +45,9 @@ class GestureConfig:
     swipe_start_speed: float = 1.2    # the hand moving faster than this starts a stroke
     swipe_end_speed: float = 0.8      # ...slower than this ends it (and counts as resting)
     swipe_end_share: float = 0.35     # ...or slower than this share of the stroke's top speed
+    swipe_resplit_share: float = 0.35 # a dip below this share of the top speed, then fast again the same way: two strokes
+    swipe_return_instant: bool = True # the cooldown ends as soon as the hand has come back far enough (else: after a pause)
+    swipe_side_protect: bool = True   # a command given too soon after a swipe is ignored, and so is its way back
     swipe_end_time: float = 0.08      # ...for this long
     swipe_core_time: float = 0.4      # the middle 80% of a swipe must take at most this long (moving the hand elsewhere is slower)
     swipe_max_time: float = 1.0       # a stroke longer than this is judged anyway (a slow wave is not a swipe)
@@ -61,6 +64,9 @@ class GestureConfig:
     swipe_rejoin: float = 0.3         # ...a stroke is joined up again if the hand is back within this long
     swipe_rejoin_long: float = 0.8    # ...a moving hand that blurred out of sight and is back elsewhere within this long: that move is the swipe
     swipe_forget: float = 2.0         # hand gone this long: forget everything
+    swipe_early: float = 1.2          # a stroke already this many times the needed distance counts at once, while still moving
+    swipe_exit_reach: float = 1.5     # a stroke that vanishes within this many palms of the side/top edge it was heading for ...
+    swipe_exit_travel: float = 0.4    # ...needs only this much distance: it swiped out of the picture
     swipe_exit_ease: float = 0.6      # a fast stroke that leaves the picture needs only this share of the distance
     # old settings, no longer used (kept so old settings files still load)
     swipe_right_ease: float = 1.0
@@ -106,7 +112,8 @@ class GestureConfig:
                     "swipe_start_speed", "swipe_end_speed", "swipe_end_time", "swipe_max_time",
                     "swipe_speed_window", "swipe_dropout", "swipe_rejoin", "swipe_forget",
                     "swipe_exit_ease", "swipe_return_fraction", "swipe_core_time", "swipe_end_share", "swipe_return_settle",
-                    "gesture_still_speed", "gesture_still_time", "gesture_facing_min", "swipe_rejoin_long")
+                    "gesture_still_speed", "gesture_still_time", "gesture_facing_min", "swipe_rejoin_long",
+                    "swipe_early", "swipe_exit_reach", "swipe_exit_travel")
         for name in positive:
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be greater than 0")

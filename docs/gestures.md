@@ -40,6 +40,11 @@ Every gesture also has a button fallback in the app (Milestone 6). The explorer 
 * Losing the hand for a moment (blur) does not reset this, and a stroke is joined up across missing frames
   (`swipe_rejoin` 0.3 s). A fast stroke that leaves the picture needs only 60% of the distance (`swipe_exit_ease`).
   A hand that just came into view does not swipe.
+* A stroke that is plainly a swipe already (1.2x the needed distance, fast, straight) counts at once, while the hand
+  is still moving (`swipe_early`); anything doubtful waits for the end of the stroke. This is what makes it feel immediate.
+* A stroke that vanishes within `swipe_exit_reach` (1.5 palms) of the side or top edge it was heading for needs only
+  `swipe_exit_travel` (0.4 palm): the hand swiped out of the picture. Not downwards (lowering the hand to rest).
+* A command given straight after a swipe, before the hand came back or paused, is ignored, and so is its way back.
 * Motion blur: a webcam often loses the hand during the fast part of a swipe. If the hand vanishes and is back
   somewhere else within `swipe_rejoin_long` (0.8 s), that jump is judged as the swipe (and its return gets the cooldown).
 * Select = pinch held still for `select_hold` (0.5 s).

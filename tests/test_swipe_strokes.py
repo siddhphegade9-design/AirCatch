@@ -175,3 +175,57 @@ def test_a_swipe_the_camera_could_not_see_for_motion_blur_still_counts_and_its_r
     rig.line((0.5, 0.5), 0.3)
     rig.hold(0.8)
     assert rig.swipes() == [dirn]
+
+
+@pytest.mark.parametrize("dirn", list(DIRS))
+def test_a_clear_swipe_counts_while_the_hand_is_still_moving(dirn):
+    """Responsiveness: a long, fast stroke registers before the hand has stopped."""
+    rig = Rig()
+    rig.hold(0.5)
+    a, b = rig.pos, target(rig.pos, dirn, 2.4)
+    n = round(0.3 * 30)
+    fired_at = None
+    for i in range(n):
+        f = (i + 1) / n
+        s = f * f * (3 - 2 * f)
+        rig.frame((a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s))
+        if fired_at is None and rig.swipes():
+            fired_at = f
+    rig.pos = b
+    rig.hold(0.3)
+    rig.line((0.5, 0.5), 0.4)
+    rig.hold(0.8)
+    assert rig.swipes() == [dirn]                      # once, and its way back not at all
+    assert fired_at is not None and fired_at < 0.9     # before the stroke was over
+
+
+@pytest.mark.parametrize("fps", [15, 30])
+@pytest.mark.parametrize("dirn", list(DIRS))
+def test_coming_straight_back_without_any_pause_is_not_a_swipe(dirn, fps):
+    rig = Rig(fps=fps)
+    rig.hold(0.5)
+    rig.line(target(rig.pos, dirn, 2.0), 0.2)
+    rig.line((0.5, 0.5), 0.3)                           # no pause at all at the far end
+    rig.hold(0.8)
+    assert rig.swipes() == [dirn]
+
+
+@pytest.mark.parametrize("dirn,start", [("right", (0.82, 0.5)), ("left", (0.18, 0.5))])
+def test_a_short_swipe_out_of_the_side_of_the_picture_counts(dirn, start):
+    """The hand rests near the side it swipes towards: only a little of the stroke is ever seen."""
+    rig = Rig()
+    rig.pos = start
+    rig.hold(0.5)
+    rig.line(target(start, dirn, 2.5), 0.25)
+    rig.hold(0.5)                                       # out of view
+    rig.line(start, 0.4)
+    rig.hold(0.8)
+    assert rig.swipes() == [dirn]
+
+
+def test_lowering_the_hand_slowly_out_of_the_picture_is_not_a_swipe_down():
+    rig = Rig()
+    rig.hold(0.5)
+    rig.line((0.5, 1.2), 2.5)
+    rig.hold(1.0)
+    assert rig.swipes() == []
