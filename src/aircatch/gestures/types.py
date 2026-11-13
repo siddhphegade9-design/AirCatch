@@ -95,3 +95,4 @@ class EngineStatus:
     pinch: bool = False                      # is the hand pinching right now?
     thumbs_up: bool = False                  # is the hand showing a thumbs up right now?
     swipe_note: str = ""                      # why the last swipe attempt was or was not accepted
+    ready: str = "nohand"                     # can a gesture start right now? ready / wait / moving / nohand

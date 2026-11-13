@@ -56,6 +56,11 @@ def to_qimage(frame_bgr) -> QImage:
     return QImage(rgb.data, w, h, rgb.strides[0], QImage.Format.Format_RGB888).copy()
 
 
+MAX_MISSED_READS = 30           # this many failed reads in a row (about a second) = the camera is gone
+MISSED_READ_PAUSE = 0.03
+MAX_UNSHOWN_FRAMES = 2          # pictures the window may be behind before new ones are skipped
+
+
 class VisionWorker(QThread):
     frameReady = Signal(QImage)
     statusReady = Signal(object)      # EngineStatus
@@ -77,6 +82,12 @@ class VisionWorker(QThread):
         self._lock = threading.Lock()
         self._pending_mode: str | None = None
         self._pending_require_motion: bool | None = None
+        self._unshown = 0             # pictures sent to the window that it has not shown yet
+
+    def frame_shown(self) -> None:
+        """Thread-safe: the window has put a picture from frameReady on screen."""
+        with self._lock:
+            self._unshown = max(0, self._unshown - 1)
 
     def set_mode(self, mode: str) -> None:
         """Thread-safe: takes effect before the next frame."""
@@ -116,11 +127,19 @@ class VisionWorker(QThread):
             engine = GestureEngine(self._config, self._mode)
             smoother = LandmarkSmoother() if self._config.smooth_landmarks else None
             self.live.emit()
+            misses = 0
             while not self._stop_event.is_set():
                 ok, frame = source.read()
                 if not ok:
-                    self.failed.emit("The camera stopped delivering frames.")
-                    break
+                    # webcams drop the odd frame; only a camera that stays silent for about a second
+                    # (unplugged, taken over by another program) is a failure
+                    misses += 1
+                    if misses >= MAX_MISSED_READS:
+                        self.failed.emit("The camera stopped delivering frames.")
+                        break
+                    self._stop_event.wait(MISSED_READ_PAUSE)
+                    continue
+                misses = 0
                 with self._lock:
                     pending, self._pending_mode = self._pending_mode, None
                     motion, self._pending_require_motion = self._pending_require_motion, None
@@ -137,7 +156,15 @@ class VisionWorker(QThread):
                 status = engine.status
                 if status.hand is not None:
                     draw_skeleton(frame, status.hand.landmarks)
-                self.frameReady.emit(to_qimage(frame))
+                # Show the picture only if the window has kept up with the earlier ones. A busy window
+                # then skips pictures instead of queueing them (which would lag behind the hand and eat
+                # memory). Gestures and status are never skipped.
+                with self._lock:
+                    show = self._unshown < MAX_UNSHOWN_FRAMES
+                    if show:
+                        self._unshown += 1
+                if show:
+                    self.frameReady.emit(to_qimage(frame))
                 self.statusReady.emit(status)
                 if events:
                     self.gestures.emit(events)

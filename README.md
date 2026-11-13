@@ -76,3 +76,11 @@ on the sender, rises from the bottom on the receiver, and zooms in once the file
 Allow AirCatch through the Windows firewall on **Private networks**.
 Full guide, safety notes and the list of what is still unverified: `docs/milestone-6.md`.
 Testing on two real PCs, step by step: `docs/two-pc-test.md`.
+
+## Milestone 10: production readiness
+
+Security, reliability and performance audit before packaging: what was checked, what was fixed and
+what is still to verify on real PCs is in `docs/milestone-10.md`. After updating, run
+
+    pip install -r requirements.txt --upgrade
+    python -m pytest

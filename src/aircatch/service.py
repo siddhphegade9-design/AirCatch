@@ -150,6 +150,8 @@ def parse_address(text: str) -> tuple[str, int] | None:
 
 
 class NetworkService(threading.Thread):
+    watch_interval = 2.0      # seconds between refreshes of the device list (network checked every other one)
+
     def __init__(self, emit: Emit, *, config_dir: str | Path, download_dir: str | Path,
                  name: str | None = None, port: int = 0, advertise: bool = True,
                  interface: str | None = None, decide_timeout: float = 60.0,
@@ -181,6 +183,8 @@ class NetworkService(threading.Thread):
         self._pairing_fut: asyncio.Future | None = None
         self._send_task: asyncio.Task | None = None
         self._last_devices: list[dict] | None = None
+        self._addresses: tuple[str, ...] = ()
+        self._azc = None
 
     # ------------------------------------------------------------------ helpers
     def _emit(self, kind: str, payload: dict | None = None) -> None:
@@ -224,7 +228,11 @@ class NetworkService(threading.Thread):
         self.loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
         self._config_dir.mkdir(parents=True, exist_ok=True)
-        self.identity = load_or_create(self._config_dir, self._wanted_name)
+        self.identity = load_or_create(self._config_dir, self._wanted_name, repair=True)
+        if self.identity.recreated:
+            log.warning("the device identity was damaged; a new one was created (pairings are lost)")
+            self._emit("notice", {"text": "This device's identity was damaged and has been reset. "
+                                          "Pair your devices again."})
         self.trust = TrustStore(self._config_dir / "trusted_peers.json")
         self.known = KnownAddresses(self._config_dir / "known_addresses.json")
         azc = None
@@ -245,29 +253,9 @@ class NetworkService(threading.Thread):
             if self._interface:
                 from zeroconf.asyncio import AsyncZeroconf
                 azc = AsyncZeroconf(interfaces=[self._interface])
-            advertised = False
-            addresses = lan_addresses_preferred_first()
-            if self._advertise and addresses:
-                try:
-                    self.advertiser = Advertiser(self.identity, self.port, addresses=addresses,
-                                                 zeroconf=azc)
-                    await self.advertiser.start()
-                    advertised = True
-                except Exception:
-                    log.warning("could not advertise on the network", exc_info=True)
-                    self.advertiser = None
-            self.discovery = Discovery(self.trust, own_identity=self.identity, zeroconf=azc,
-                                       on_change=self._publish_devices)
-            try:
-                await self.discovery.start()
-            except Exception:
-                log.warning("could not start discovery", exc_info=True)
-            text = (f"Visible on this network · port {self.port}" if advertised
-                    else f"Listening on port {self.port} (not visible to others)")
-            log.info("service ready: %s as '%s' addresses=%s advertised=%s", text, self.identity.name,
-                     addresses, advertised)
-            self._emit("status", {"text": text, "ready": True, "port": self.port,
-                                  "name": self.identity.name})
+            self._azc = azc
+            advertised = await self._start_announcing()
+            self._emit_ready(advertised)
             self._publish_devices()
             self.ready.set()
             publisher = asyncio.create_task(self._publisher())
@@ -277,6 +265,44 @@ class NetworkService(threading.Thread):
                 publisher.cancel()
         finally:
             await self._shutdown(azc)
+
+    def _emit_ready(self, advertised: bool) -> None:
+        text = (f"Visible on this network · port {self.port}" if advertised
+                else f"Listening on port {self.port} (not visible to others)")
+        log.info("service ready: %s as '%s' addresses=%s advertised=%s", text, self.identity.name,
+                 list(self._addresses), advertised)
+        self._emit("status", {"text": text, "ready": True, "port": self.port,
+                              "name": self.identity.name})
+
+    async def _start_announcing(self) -> bool:
+        """(Re)start being visible and looking for others, for the addresses this PC has right now.
+
+        Called at start-up and again whenever the PC's network changes (Wi-Fi connected after the
+        app started, a new address from the router, waking up on another network)."""
+        for step in (self.discovery, self.advertiser):
+            if step is not None:
+                with contextlib.suppress(Exception):
+                    await step.stop()
+        self.discovery = self.advertiser = None
+        advertised = False
+        addresses = await asyncio.to_thread(lan_addresses_preferred_first)
+        self._addresses = tuple(addresses)
+        if self._advertise and addresses:
+            try:
+                self.advertiser = Advertiser(self.identity, self.port, addresses=addresses,
+                                             zeroconf=self._azc)
+                await self.advertiser.start()
+                advertised = True
+            except Exception:
+                log.warning("could not advertise on the network", exc_info=True)
+                self.advertiser = None
+        self.discovery = Discovery(self.trust, own_identity=self.identity, zeroconf=self._azc,
+                                   on_change=self._publish_devices)
+        try:
+            await self.discovery.start()
+        except Exception:
+            log.warning("could not start discovery", exc_info=True)
+        return advertised
 
     async def _shutdown(self, azc) -> None:
         if self._send_task is not None and not self._send_task.done():
@@ -292,9 +318,24 @@ class NetworkService(threading.Thread):
                 await azc.async_close()
 
     async def _publisher(self) -> None:
+        ticks = 0
         while True:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(self.watch_interval)
             self._publish_devices()
+            ticks += 1
+            if ticks % 2:
+                continue
+            try:                                  # every 4 s: has this PC's network changed?
+                now = tuple(await asyncio.to_thread(lan_addresses_preferred_first))
+                if now != self._addresses:
+                    log.info("network changed: %s -> %s", list(self._addresses), list(now))
+                    advertised = await self._start_announcing()
+                    self._emit_ready(advertised)
+                    self._publish_devices()
+            except asyncio.CancelledError:
+                raise
+            except Exception:                     # never let the watcher die
+                log.warning("could not follow a network change", exc_info=True)
 
     def stop(self, timeout: float = 6.0) -> None:
         """Stop everything cleanly. Safe to call more than once."""

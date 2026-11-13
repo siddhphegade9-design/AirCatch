@@ -65,6 +65,49 @@ Window {
         }
     }
 
+    // "Can I gesture now?" at a glance: green READY, amber WAIT (bring your hand back), blue while moving.
+    component ReadyPill: Rectangle {
+        id: pill
+        property string state: backend.gestureReady
+        readonly property color tone: state === "ready" ? root.green
+                                     : state === "wait" ? "#ffb347"
+                                     : state === "moving" ? root.cyan : "#5b6b8c"
+        visible: backend.cameraActive
+        height: 26; radius: 13
+        width: pillRow.implicitWidth + 22
+        color: "#cc07101f"
+        border.color: tone
+        border.width: 1.5
+        Behavior on border.color { ColorAnimation { duration: root.d(140) } }
+        Row {
+            id: pillRow
+            anchors.centerIn: parent
+            spacing: 7
+            Rectangle {
+                id: dot
+                width: 9; height: 9; radius: 4.5
+                anchors.verticalCenter: parent.verticalCenter
+                color: pill.tone
+                Behavior on color { ColorAnimation { duration: root.d(140) } }
+                SequentialAnimation on opacity {              // a gentle pulse while ready
+                    running: pill.state === "ready" && pill.visible && !backend.reducedMotion
+                    loops: Animation.Infinite
+                    alwaysRunToEnd: true
+                    NumberAnimation { to: 0.45; duration: 700; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 1.0; duration: 700; easing.type: Easing.InOutSine }
+                }
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: pill.state === "ready" ? "READY"
+                    : pill.state === "wait" ? "WAIT · bring your hand back"
+                    : pill.state === "moving" ? "MOVING" : "NO HAND"
+                color: pill.tone
+                font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 0.8
+            }
+        }
+    }
+
     component Card: Rectangle {
         property string title: ""
         default property alias content: body.data
@@ -211,6 +254,8 @@ Window {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 title: "GESTURE STUDIO"
+
+                ReadyPill { anchors.right: parent.right; anchors.rightMargin: 14; y: -34 }    // above the camera view
 
                 Rectangle {
                     id: studio
@@ -1156,7 +1201,11 @@ Window {
                 id: head
                 x: 22; y: 18; width: parent.width - 44
                 spacing: 4
-                Text { text: "Choose a file"; color: root.textColor; font.pixelSize: 20; font.weight: Font.DemiBold }
+                Row {
+                    spacing: 12
+                    Text { text: "Choose a file"; color: root.textColor; font.pixelSize: 20; font.weight: Font.DemiBold }
+                    ReadyPill { anchors.verticalCenter: parent.verticalCenter }   // the explorer covers the camera view
+                }
                 Text {
                     width: parent.width; elide: Text.ElideMiddle
                     text: backend.browserTitle; color: root.cyan; font.pixelSize: 12

@@ -270,3 +270,27 @@ def test_every_direction_at_every_camera_speed(fps):
             rig.line((0.5 + r.uniform(-0.3, 0.3) * 0.2 / ASPECT, 0.5 + r.uniform(-0.3, 0.3) * 0.2), r.uniform(0.25, 0.5))
             rig.hold(r.uniform(0.25, 0.5))
         assert rig.swipes() == want, (fps, seed)
+
+
+def test_the_ready_signal_follows_the_swipe_cooldown():
+    """READY -> (swipe) -> WAIT until the hand is back and has paused -> READY; NO HAND when there is none."""
+    rig = Rig()
+    assert rig.e.status.ready == "nohand"
+    rig.hold(0.5)
+    assert rig.e.status.ready == "ready"
+    seen = set()
+    a, b = rig.pos, target(rig.pos, "right", 2.0)
+    for i in range(6):
+        rig.frame((a[0] + (b[0] - a[0]) * (i + 1) / 6, a[1]))
+        seen.add(rig.e.status.ready)
+    rig.pos = b
+    assert "moving" in seen
+    rig.hold(0.3)
+    assert rig.swipes() == ["right"] and rig.e.status.ready == "wait"     # out there: the way back will not count
+    rig.line((0.5, 0.5), 0.4)
+    rig.hold(0.6)
+    assert rig.e.status.ready == "ready"                                    # back and paused
+    for _ in range(40):
+        rig.t += 1 / 30
+        rig.e.update([], rig.t)
+    assert rig.e.status.ready == "nohand"

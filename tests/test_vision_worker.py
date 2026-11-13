@@ -43,11 +43,17 @@ class FakeTracker:
         self.closed = True
 
 
-def run_worker(source, tracker, *, mode="send", clock=time.monotonic, until=lambda r: False, wait=5.0):
+def run_worker(source, tracker, *, mode="send", clock=time.monotonic, until=lambda r: False, wait=5.0,
+               window_keeps_up=True):
     result = {"frames": [], "statuses": [], "events": [], "failed": [], "live": 0}
     worker = VisionWorker(GestureConfig(), mode, source_factory=lambda: source,
                           tracker_factory=lambda: tracker, clock=clock)
-    worker.frameReady.connect(lambda img: result["frames"].append(img), DIRECT)
+
+    def shown(img):
+        result["frames"].append(img)
+        if window_keeps_up:
+            worker.frame_shown()
+    worker.frameReady.connect(shown, DIRECT)
     worker.statusReady.connect(lambda s: result["statuses"].append(s), DIRECT)
     worker.gestures.connect(lambda e: result["events"].extend(e), DIRECT)
     worker.failed.connect(lambda m: result["failed"].append(m), DIRECT)
@@ -131,3 +137,35 @@ def test_a_processing_error_is_reported_and_cleaned_up(qapp):
     assert worker.wait(3000)
     assert "processing error" in r["failed"][0].lower()
     assert source.released and tracker.closed
+
+
+class HiccupSource(FakeSource):
+    """Drops a few frames now and then, like a real webcam, but keeps going."""
+
+    def read(self):
+        ok, frame = super().read()
+        if self.reads % 10 in (3, 4, 5):
+            return False, None
+        return ok, frame
+
+
+def test_a_camera_that_drops_the_odd_frame_keeps_running(qapp):
+    source, tracker = HiccupSource(), FakeTracker()
+    worker, r = run_worker(source, tracker, until=lambda r: len(r["frames"]) >= 30)
+    assert len(r["frames"]) >= 30 and not r["failed"]
+    worker.stop()
+    assert source.released
+
+
+def test_a_busy_window_skips_pictures_but_never_gestures(qapp):
+    """The window never says it showed a picture: the worker must stop queueing pictures for it,
+    while every frame is still analysed (status keeps flowing, gesture events arrive)."""
+    script = render([Seg(0.5, "open"), Seg(0.6, "fist"), Seg(0.3, "open", start=(0.5, 0.5), end=(0.9, 0.5))], fps=30)
+    times = iter([t for t, _ in script] + [script[-1][0] + 0.03 * i for i in range(1, 2000)])
+    source, tracker = FakeSource(), FakeTracker(script)
+    worker, r = run_worker(source, tracker, clock=lambda: next(times), window_keeps_up=False,
+                           until=lambda r: len(r["statuses"]) >= len(script) + 5)
+    worker.stop()
+    assert len(r["frames"]) == 2                                   # no backlog builds up
+    assert len(r["statuses"]) >= len(script)                       # ...but nothing was left unanalysed
+    assert "grab" in [e.kind for e in r["events"]]

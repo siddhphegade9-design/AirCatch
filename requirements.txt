@@ -2,9 +2,9 @@ PySide6>=6.7
 opencv-contrib-python>=4.9,<4.12
 mediapipe==0.10.14
 numpy>=1.26,<2
-cryptography>=42
+cryptography>=50.0.0
 platformdirs>=4.0
 qrcode>=7.4
-zeroconf>=0.130
-pytest>=8.0
-pillow>=10
+zeroconf>=0.149.16
+pytest>=9.0.3
+pillow>=13.0.0

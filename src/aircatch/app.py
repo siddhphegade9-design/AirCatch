@@ -1,4 +1,4 @@
-"""AirCatch desktop application.
+r"""AirCatch desktop application.
 
 Two instances on one PC (for testing) need separate identities, folders and ports:
 

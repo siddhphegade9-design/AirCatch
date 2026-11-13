@@ -462,3 +462,33 @@ def test_services_never_write_secrets_to_the_log(tmp_path, caplog):
     logged = caplog.text
     assert "paired with" in logged
     assert token not in logged and "BEGIN CERTIFICATE" not in logged and "PRIVATE KEY" not in logged
+
+
+def test_the_service_notices_when_the_pc_changes_network(tmp_path, monkeypatch):
+    """Wi-Fi connected after the app started, or a new address from the router: the service must
+    start announcing itself again without a restart."""
+    import aircatch.service as service_module
+    addresses = {"now": ["192.168.1.10"]}
+    monkeypatch.setattr(service_module, "lan_addresses_preferred_first", lambda: list(addresses["now"]))
+    monkeypatch.setattr(NetworkService, "watch_interval", 0.05)
+    service, sink = make_service(tmp_path, "Roamer")
+    try:
+        first = service.discovery
+        assert service._addresses == ("192.168.1.10",)
+        sink.wait_for("status", lambda p: p["ready"])
+        addresses["now"] = ["10.0.0.7"]                       # the laptop joined another network
+        deadline = time.monotonic() + 10
+        while service._addresses != ("10.0.0.7",) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert service._addresses == ("10.0.0.7",)
+        assert service.discovery is not None and service.discovery is not first      # looking afresh
+        addresses["now"] = []                                 # Wi-Fi switched off: must not crash
+        deadline = time.monotonic() + 10
+        while service._addresses != () and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert service._addresses == () and service.is_alive()
+        with sink._cond:
+            ready = [p for k, p in sink.events if k == "status" and p["ready"]]
+        assert len(ready) >= 3                                # the app was told each time
+    finally:
+        service.stop()

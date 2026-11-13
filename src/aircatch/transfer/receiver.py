@@ -34,7 +34,9 @@ log = logging.getLogger(__name__)
 GIB = 1024 ** 3
 DEFAULT_MAX_FILE_SIZE = 10 * GIB
 DISK_SAFETY_MARGIN = 50 * 1024 * 1024
-OFFER_TIMEOUT = 15.0
+OFFER_TIMEOUT = 15.0                # a paired device must say what it wants within this long
+UNKNOWN_PEER_TIMEOUT = 5.0          # ...a device that showed no certificate (only pairing is possible) gets less
+MAX_CONNECTIONS_PER_ADDRESS = 4     # one machine may not take every connection slot
 PROGRESS_INTERVAL = 0.05
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -67,9 +69,25 @@ def _write_and_hash(handle, hasher, chunk: bytes) -> None:
     hasher.update(chunk)
 
 
+_ZONE_MARK = b"[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=about:internet\r\n"
+
+
+def _mark_from_network(path: Path) -> None:
+    """Windows 'Mark of the Web': tells Windows this file came from another computer, so it warns
+    before running a received program (SmartScreen) and Office opens documents in Protected View.
+    It is a hidden side stream of the file; other systems have no such thing, and failing is harmless."""
+    if os.name != "nt":
+        return
+    with contextlib.suppress(OSError):
+        # written as exact bytes: in text mode Windows would turn each "\r\n" into "\r\r\n"
+        with open(f"{path}:Zone.Identifier", "wb") as stream:
+            stream.write(_ZONE_MARK)
+
+
 def _finalize(tmp_path: Path, dest_dir: Path, filename: str) -> Path:
     destination = reserve_destination(dest_dir, filename)
     os.replace(tmp_path, destination)  # replaces our own empty placeholder only
+    _mark_from_network(destination)
     return destination
 
 
@@ -102,7 +120,8 @@ class Receiver:
                  max_file_size: int = DEFAULT_MAX_FILE_SIZE, max_concurrent: int = 2,
                  idle_timeout: float = 30.0, decide_timeout: float = 60.0,
                  identity: DeviceIdentity | None = None, trust: TrustStore | None = None,
-                 max_connections: int = 8, tls_handshake_timeout: float = 10.0) -> None:
+                 max_connections: int = 8, tls_handshake_timeout: float = 10.0,
+                 max_per_address: int = MAX_CONNECTIONS_PER_ADDRESS) -> None:
         if (identity is None) != (trust is None):
             raise ValueError("identity and trust must be given together (secure mode)")
         self._dest_dir = Path(dest_dir)
@@ -121,6 +140,8 @@ class Receiver:
         self._trust = trust
         self._secure = identity is not None
         self._max_connections = max_connections
+        self._max_per_address = max_per_address
+        self._per_address: dict[str, int] = {}
         self._tls_handshake_timeout = tls_handshake_timeout
         self._ssl_ctx: ssl.SSLContext | None = None
         self._pairing: PairingSession | None = None
@@ -177,11 +198,14 @@ class Receiver:
     async def _on_connection(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
-        assert task is not None
-        if len(self._tasks) >= self._max_connections:   # connection limit
+        peername = writer.get_extra_info("peername")
+        address = peername[0] if peername else "unknown"
+        if (task is None or len(self._tasks) >= self._max_connections      # connection limits: in total,
+                or self._per_address.get(address, 0) >= self._max_per_address):   # and per machine
             writer.close()
             return
         self._tasks.add(task)
+        self._per_address[address] = self._per_address.get(address, 0) + 1
         try:
             await self._handle(reader, writer)
         except asyncio.CancelledError:
@@ -190,6 +214,11 @@ class Receiver:
             log.exception("unexpected error while handling a connection")
         finally:
             self._tasks.discard(task)
+            left = self._per_address.get(address, 1) - 1
+            if left > 0:
+                self._per_address[address] = left
+            else:
+                self._per_address.pop(address, None)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -345,8 +374,12 @@ class Receiver:
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peername = writer.get_extra_info("peername")
         peer = f"{peername[0]}:{peername[1]}" if peername else "unknown"
+        # a device that showed a certificate we trust gets the normal time; anything else can only be
+        # asking to pair, which it does at once, so it may not sit on a connection slot for long
+        known = self._secure and self._authenticated_peer(writer) is not None
         try:
-            msg = await read_message(reader, OFFER_TIMEOUT)
+            msg = await read_message(reader, OFFER_TIMEOUT if known or not self._secure
+                                     else UNKNOWN_PEER_TIMEOUT)
         except ProtocolError as exc:
             log.info("bad connection from %s: %s", peer, exc)
             await self._try_send(writer, {"type": "reject", "reason": "malformed"})

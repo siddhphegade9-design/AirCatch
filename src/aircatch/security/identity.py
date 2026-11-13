@@ -6,6 +6,7 @@ every platform (Windows, Android, iOS) supports it for TLS.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
@@ -74,6 +75,7 @@ class DeviceIdentity:
     cert_pem: str
     cert_path: Path
     key_path: Path
+    recreated: bool = False   # the old identity was damaged and a new one was made (pairings are lost)
 
 
 def _write_private(path: Path, data: bytes) -> None:
@@ -113,32 +115,72 @@ def _generate() -> tuple[bytes, bytes]:
     return key_pem, cert.public_bytes(serialization.Encoding.PEM)
 
 
-def load_or_create(config_dir: str | Path, name: str | None = None) -> DeviceIdentity:
+def _check_pair(key_path: Path, cert_path: Path) -> tuple[str, str]:
+    """(clean certificate text, fingerprint) if the two files are a usable identity; else IdentityError."""
+    try:
+        cert_pem_text, fingerprint = normalize_cert_pem(cert_path.read_text("ascii"))
+    except (OSError, ValueError) as exc:
+        raise IdentityError(f"damaged certificate in {cert_path}") from exc
+    try:
+        key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+        cert = x509.load_pem_x509_certificate(cert_pem_text.encode("ascii"))
+        same = (isinstance(key, ec.EllipticCurvePrivateKey)
+                and key.public_key().public_numbers() == cert.public_key().public_numbers())
+    except (OSError, ValueError, TypeError) as exc:
+        raise IdentityError(f"damaged private key in {key_path}") from exc
+    if not same:
+        raise IdentityError(f"the private key in {key_path} does not belong to the certificate")
+    return cert_pem_text, fingerprint
+
+
+def _set_aside(base: Path) -> None:
+    """Move a damaged identity out of the way (never delete it: it may be wanted for a look later)."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = base / f"damaged-{stamp}"
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("device.key", "device.crt"):
+        with contextlib.suppress(OSError):
+            if (base / name).exists():
+                os.replace(base / name, target / name)
+
+
+def load_or_create(config_dir: str | Path, name: str | None = None, *,
+                   repair: bool = False) -> DeviceIdentity:
     """Load this device's identity, creating it on first run.
 
     Files live in <config_dir>/identity/. Different config dirs = different devices,
     which is how two instances can run on one PC for testing.
+
+    A damaged or incomplete identity raises IdentityError. With repair=True (the app) it is instead
+    set aside and replaced by a new one, and the result says so (`recreated`): other devices will not
+    recognise the new identity and have to be paired again.
     """
     base = Path(config_dir) / "identity"
     base.mkdir(parents=True, exist_ok=True)
     key_path, cert_path, meta_path = base / "device.key", base / "device.crt", base / "identity.json"
 
-    if key_path.exists() != cert_path.exists():
-        raise IdentityError(f"incomplete identity in {base}: need both device.key and device.crt")
+    recreated = False
+    try:
+        if key_path.exists() != cert_path.exists():
+            raise IdentityError(f"incomplete identity in {base}: need both device.key and device.crt")
+        if key_path.exists():
+            cert_pem_text, fingerprint = _check_pair(key_path, cert_path)
+    except IdentityError:
+        if not repair:
+            raise
+        _set_aside(base)
+        recreated = True
     if not key_path.exists():
         key_pem, cert_pem = _generate()
         _write_private(key_path, key_pem)
         _write_private(cert_path, cert_pem)
-
-    try:
-        cert_pem_text, fingerprint = normalize_cert_pem(cert_path.read_text("ascii"))
-    except (OSError, ValueError) as exc:
-        raise IdentityError(f"damaged certificate in {cert_path}") from exc
+        cert_pem_text, fingerprint = _check_pair(key_path, cert_path)
 
     stored = ""
     if meta_path.exists():
         try:
-            stored = str(json.loads(meta_path.read_text("utf-8")).get("name", ""))
+            meta = json.loads(meta_path.read_text("utf-8"))
+            stored = str(meta.get("name", "")) if isinstance(meta, dict) else ""
         except (OSError, ValueError):
             stored = ""
     if name:
@@ -146,5 +188,6 @@ def load_or_create(config_dir: str | Path, name: str | None = None) -> DeviceIde
     else:
         chosen = clean_device_name(stored or socket.gethostname())
     if chosen != stored:
-        meta_path.write_text(json.dumps({"name": chosen}), encoding="utf-8")
-    return DeviceIdentity(chosen, fingerprint, cert_pem_text, cert_path, key_path)
+        with contextlib.suppress(OSError):
+            meta_path.write_text(json.dumps({"name": chosen}), encoding="utf-8")
+    return DeviceIdentity(chosen, fingerprint, cert_pem_text, cert_path, key_path, recreated)

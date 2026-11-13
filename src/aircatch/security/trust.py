@@ -67,6 +67,8 @@ class TrustStore:
         try:
             data = json.loads(self._path.read_text("utf-8"))
             entries = data["peers"]
+            if not isinstance(entries, list):
+                raise TypeError("peers must be a list")
         except (OSError, ValueError, KeyError, TypeError):
             backup = self._path.with_suffix(".corrupt")
             log.warning("trust store unreadable; moving it to %s", backup)
@@ -84,7 +86,7 @@ class TrustStore:
                 self._peers[fingerprint] = TrustedPeer(
                     fingerprint, clean_device_name(str(entry.get("name", ""))), pem,
                     str(entry.get("paired_at", "")))
-            except (KeyError, ValueError, TypeError):
+            except (KeyError, ValueError, TypeError, AttributeError):
                 log.warning("ignoring invalid trust-store entry")
 
     def _save(self) -> None:

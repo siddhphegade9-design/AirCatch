@@ -608,3 +608,35 @@ def test_clicking_a_row_works_like_a_thumbs_up(ctl, tmp_path):
     ctl.browserActivate(0)                                            # Desk
     ctl.browserActivate(2)                                            # b.txt
     assert ctl.fileName == "b.txt" and not ctl.browsing
+
+
+def test_pressing_receive_puts_the_chosen_file_away(ctl, tmp_path):
+    f = tmp_path / "notes.txt"
+    f.write_text("hello")
+    ctl.chooseFile(str(f))
+    assert ctl.hasFile
+    ctl.setReceiveMode()
+    assert ctl.mode == "receive" and not ctl.hasFile and ctl.fileName == "" and ctl.senderPhase == "idle"
+    ctl.setSendMode()
+    assert not ctl.hasFile                              # it stays away: choose again to send
+
+
+def test_switching_back_to_send_does_not_touch_the_file(ctl, tmp_path):
+    f = tmp_path / "notes.txt"
+    f.write_text("hello")
+    ctl.setSendMode()
+    ctl.chooseFile(str(f))
+    ctl.setSendMode()
+    assert ctl.hasFile
+
+
+def test_the_ready_indicator_follows_the_gesture_engine(ctl):
+    from aircatch.gestures.types import EngineStatus, Pose
+    assert ctl.gestureReady == "nohand"
+    seen = []
+    ctl.gestureReadyChanged.connect(lambda: seen.append(ctl.gestureReady))
+    for ready in ("ready", "ready", "moving", "wait", "ready"):
+        ctl._on_gesture_status(EngineStatus(mode="browse", state="idle", pose=Pose.OPEN, fingers=(True,) * 4,
+                                            hand_present=True, progress=0.0, cooldown_left=0.0, speed=0.0,
+                                            palm_center=None, hint="", ready=ready))
+    assert seen == ["ready", "moving", "wait", "ready"]                     # only changes are announced

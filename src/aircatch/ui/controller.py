@@ -174,7 +174,7 @@ _DEFAULTS: dict = {
     "status": "Starting AirCatch…", "deviceName": "", "networkReady": False, "downloadDir": "",
     "cameraActive": False, "cameraStarting": False, "frameCounter": 0, "mode": "send",
     "gestureState": "NO HAND", "gestureHint": "Start the camera to use gestures",
-    "gestureProgress": 0.0, "handPresent": False, "handX": 0.5, "handY": 0.5,
+    "gestureProgress": 0.0, "gestureReady": "nohand", "handPresent": False, "handX": 0.5, "handY": 0.5,
     "hasFile": False, "fileName": "", "fileSize": "", "fileKind": "other", "fileBadge": "",
     "thumbVersion": 0, "hasThumb": False,
     "selectedDevice": -1, "selectedDeviceName": "", "canSend": False, "manualAddress": "",
@@ -234,6 +234,9 @@ class AppController(QObject):
     gestureHint = Property(str, lambda s: s._v["gestureHint"], notify=gestureHintChanged)
     gestureProgress = Property(float, lambda s: s._v["gestureProgress"], notify=gestureProgressChanged)
     handPresent = Property(bool, lambda s: s._v["handPresent"], notify=handPresentChanged)
+    gestureReadyChanged = Signal()
+    # "ready" (a gesture can start now), "wait" (bring the hand back / cooling down), "moving", "nohand"
+    gestureReady = Property(str, lambda s: s._v["gestureReady"], notify=gestureReadyChanged)
     handX = Property(float, lambda s: s._v["handX"], notify=handXChanged)
     handY = Property(float, lambda s: s._v["handY"], notify=handYChanged)
     hasFile = Property(bool, lambda s: s._v["hasFile"], notify=hasFileChanged)
@@ -490,6 +493,7 @@ class AppController(QObject):
         self._set("cameraStarting", False)
         self._set("cameraActive", False)
         self._set("handPresent", False)
+        self._set("gestureReady", "nohand")
         self._set("gestureState", "NO HAND")
         self._set("gestureProgress", 0.0)
         self._set("gestureHint", "Start the camera to use gestures")
@@ -501,6 +505,9 @@ class AppController(QObject):
     def _on_frame(self, image: QImage) -> None:
         self._camera_provider.set_image(image)
         self._set("frameCounter", self._v["frameCounter"] + 1)
+        shown = getattr(self._worker, "frame_shown", None)
+        if shown is not None:
+            shown()                       # tell the camera thread the window is keeping up
 
     def _on_gesture_status(self, status) -> None:
         self._set("gestureState", status.state.replace("_", " ").upper())
@@ -510,6 +517,7 @@ class AppController(QObject):
         self._set("gestureHint", hint)
         self._set("gestureProgress", round(status.progress, 2))
         self._set("handPresent", status.hand_present)
+        self._set("gestureReady", getattr(status, "ready", "nohand"))
         if status.palm_center is not None and status.hand is not None:
             aspect = status.hand.aspect or 1.0
             self._set("handX", round(min(1.0, max(0.0, status.palm_center[0] / aspect)), 3))
@@ -590,6 +598,8 @@ class AppController(QObject):
     def setReceiveMode(self) -> None:
         self._mode_before_offer = None
         self._apply_mode("receive")
+        self.clearFile()      # pressing Receive puts the chosen file away: just the camera view
+                              # (not while a file is on its way; an incoming offer does not do this)
 
     # ------------------------------------------------------------------ the file explorer
     def _tell_worker_mode(self) -> None:
@@ -941,6 +951,10 @@ class AppController(QObject):
             self._set("status", p["text"])
         if not p.get("ready"):
             self._toast(p["text"])
+
+    def _net_notice(self, p: dict) -> None:
+        log.warning("notice: %s", p.get("text", ""))
+        self._toast(str(p.get("text", "")))
 
     def _net_devices(self, p: dict) -> None:
         self._update_devices(p["items"])

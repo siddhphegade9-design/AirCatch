@@ -30,7 +30,7 @@ from aircatch.gestures.config import GestureConfig
 from aircatch.gestures.pose import PoseClassifier, PoseResult, hand_centroid, palm_geometry
 from aircatch.gestures.swipe import SwipeDetector
 from aircatch.gestures.types import (INDEX_MCP, MIDDLE_MCP, MODES, PINKY_MCP, WRIST, EngineStatus,
-                                     EventKind, GestureEvent, HandObservation, Pose)
+                                     GestureEvent, HandObservation, Pose)
 
 NO_HAND, IDLE, READY, HOLDING, CATCH_ARMED, COOLDOWN = (
     "no_hand", "idle", "ready", "holding", "catch_armed", "cooldown")
@@ -433,7 +433,16 @@ class GestureEngine:
             hint = "Gestures are paused (tracking only)"
         elif self._state == COOLDOWN:
             hint = "Done. Wait a moment ..."
+        if self._hand is None:
+            ready = "nohand"
+        elif self._state == COOLDOWN:
+            ready = "wait"
+        elif self._mode == "browse":           # the next swipe counts once the hand is back from the last one
+            ready = "wait" if self._swiper.returning else "moving" if self._swiper.in_stroke else "ready"
+        else:
+            ready = "ready"
         return EngineStatus(
+            ready=ready,
             mode=self._mode, state=self._state,
             pose=now_pose if self._hand is not None else Pose.NONE,
             fingers=result.fingers if result else (False, False, False, False),
