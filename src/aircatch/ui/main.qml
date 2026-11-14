@@ -796,6 +796,13 @@ Window {
                         font.pixelSize: 11
                         MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: backend.openLogFolder() }
                     }
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: 8
+                        text: "Help · v" + backend.appVersion
+                        color: root.mutedColor; font.pixelSize: 11
+                        MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: backend.showWelcomeAgain() }
+                    }
                     Row {
                         anchors.right: parent.right; anchors.rightMargin: 16
                         anchors.bottom: parent.bottom; anchors.bottomMargin: 8
@@ -1173,6 +1180,95 @@ Window {
             if (ok) joinCloser.restart()
         }
         function onToastChanged() { toastText.text = backend.toast; toast.shown = true; toastTimer.restart() }
+    }
+
+    // ---- first start: what AirCatch needs from this PC ---------------------------------------------
+    Rectangle {
+        id: welcome
+        z: 400
+        anchors.fill: parent
+        color: "#e6050a14"
+        opacity: backend.showWelcome ? 1 : 0
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: root.d(180) } }
+        MouseArea { anchors.fill: parent; hoverEnabled: true }       // nothing behind it can be clicked
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(620, parent.width - 60)
+            height: Math.min(welcomeColumn.implicitHeight + 52, parent.height - 40)
+            radius: 20
+            color: root.cardColor; border.color: root.lineColor
+            clip: true
+
+            Column {
+                id: welcomeColumn
+                anchors.fill: parent; anchors.margins: 26
+                spacing: 14
+
+                Text { text: "Welcome to AirCatch"; color: root.textColor; font.pixelSize: 22; font.weight: Font.DemiBold }
+                Text {
+                    width: parent.width; wrapMode: Text.WordWrap
+                    text: "Grab a file with your hand, throw it, and catch it on another PC. Three things make that work:"
+                    color: root.mutedColor; font.pixelSize: 13
+                }
+
+                component WelcomeItem: Row {
+                    property string number: ""
+                    property string heading: ""
+                    property string body: ""
+                    property string state: ""          // shown in colour under the text when not empty
+                    property color stateColor: root.mutedColor
+                    width: welcomeColumn.width
+                    spacing: 12
+                    Rectangle {
+                        width: 26; height: 26; radius: 13; color: "#13203f"; border.color: "#2a3d6e"
+                        Text { anchors.centerIn: parent; text: number; color: root.cyan; font.pixelSize: 13; font.weight: Font.Bold }
+                    }
+                    Column {
+                        width: parent.width - 38
+                        spacing: 3
+                        Text { text: heading; color: root.textColor; font.pixelSize: 14; font.weight: Font.DemiBold }
+                        Text { width: parent.width; wrapMode: Text.WordWrap; text: body; color: root.mutedColor; font.pixelSize: 12; lineHeight: 1.15 }
+                        Text { width: parent.width; wrapMode: Text.WordWrap; visible: state !== ""; text: state; color: stateColor; font.pixelSize: 12 }
+                    }
+                }
+
+                WelcomeItem {
+                    number: "1"; heading: "Camera"
+                    body: "AirCatch watches your hand through the camera to read gestures. The picture stays on this PC: it is never recorded or sent. "
+                          + "If the camera will not start, open Windows Settings > Privacy & security > Camera and turn on “Let desktop apps access your camera”. "
+                          + "No camera? The Send, Catch and Browse buttons do everything gestures do."
+                    state: backend.cameraActive ? "Camera is working." : backend.cameraStarting ? "Starting the camera…" : ""
+                    stateColor: backend.cameraActive ? root.green : root.amber
+                }
+                WelcomeItem {
+                    number: "2"; heading: "Network and firewall"
+                    body: "Both PCs must be on the same Wi-Fi or hotspot. To receive files, Windows Firewall has to allow AirCatch on private networks: "
+                          + "the installer sets this up, and otherwise Windows asks the first time, so choose Allow. "
+                          + "If the other PC cannot see this one, check that Windows calls your Wi-Fi a “Private network”."
+                    state: backend.status
+                    stateColor: backend.networkReady ? root.green : root.amber
+                }
+                WelcomeItem {
+                    number: "3"; heading: "Pair once"
+                    body: "On one PC choose “Pair a device”; on the other choose “Join with code” and enter what the first one shows. "
+                          + "After that the two PCs trust each other and nobody else can send you files."
+                }
+
+                Row {
+                    spacing: 10
+                    Btn { label: "Got it"; onClicked: backend.dismissWelcome() }
+                    Btn {
+                        primary: false
+                        label: backend.cameraActive ? "Camera is on" : "Try the camera"
+                        active: !backend.cameraActive && !backend.cameraStarting
+                        onClicked: if (active) backend.toggleCamera()
+                    }
+                }
+                Text { text: "AirCatch " + backend.appVersion; color: "#4a5a82"; font.pixelSize: 11 }
+            }
+        }
     }
 
     // ---- gesture file explorer -----------------------------------------------------------------

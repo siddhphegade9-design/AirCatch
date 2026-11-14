@@ -1,0 +1,84 @@
+# Tests AirCatch on Windows and builds the installer and the portable zip.
+#
+#   every push and pull request   run the tests, build the package, start it and test it
+#   a tag such as v1.0.0          the same, then publish a GitHub Release with the downloads
+#
+# To publish version 1.0.0:
+#   1. set __version__ = "1.0.0" in src/aircatch/__init__.py and describe it in CHANGELOG.md
+#   2. git tag v1.0.0  &&  git push origin v1.0.0
+name: Build and release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed only to create the Release on a tag
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Run the tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: The tag must match the version in the code
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (python -c "import sys; sys.path.insert(0, 'src'); import aircatch; print(aircatch.__version__)")
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            Write-Error "Tag ${{ github.ref_name }} does not match __version__ = $version in src/aircatch/__init__.py"
+            exit 1
+          }
+
+      - name: Build, self-test, make installer and zip
+        shell: pwsh
+        run: ./packaging/build.ps1 -InstallInnoSetup
+
+      - name: Keep the downloads from this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirCatch-windows
+          path: |
+            dist/installer/*.exe
+            dist/*-windows-portable.zip
+            dist/SHA256SUMS.txt
+            dist/self-test.json
+          if-no-files-found: error
+
+      - name: Publish the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # release notes = this version's section of CHANGELOG.md
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $notes = @(); $take = $false
+          foreach ($line in Get-Content CHANGELOG.md) {
+            if ($line -match "^## ") { if ($take) { break }; $take = $line -match [regex]::Escape($version) ; continue }
+            if ($take) { $notes += $line }
+          }
+          if (-not $notes) { $notes = @("AirCatch $version") }
+          $notes | Set-Content -Encoding utf8 release-notes.md
+          $files = @(Get-ChildItem dist/installer/*.exe) + @(Get-ChildItem dist/*-windows-portable.zip) + @(Get-Item dist/SHA256SUMS.txt)
+          gh release create "${{ github.ref_name }}" @($files.FullName) --title "AirCatch $version" --notes-file release-notes.md

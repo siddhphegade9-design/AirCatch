@@ -18,6 +18,7 @@
 | A file name that lies | Folders, forbidden characters and Windows device names (also `NUL.tar.gz`) are removed; invisible characters that disguise an extension (`photo<RLO>gpj.exe`) are stripped (Milestone 10). |
 | Running a received program by accident | AirCatch never launches programs, and on Windows marks every saved file as "from another computer", so Windows warns before running it (Milestone 10, not yet verified on Windows). |
 | Damaged identity or trust files | A damaged trust list trusts nobody. A damaged identity is set aside and replaced, and the app says the devices must be paired again (Milestone 10). |
+| A program started from the wrong place or by the wrong user | The installed program writes nothing next to itself: identity, settings and logs live in the user's own `%LOCALAPPDATA%\AirCatch`. The installer opens the firewall for AirCatch on **private** networks only (Milestone 11). |
 | Vulnerable libraries | Minimum versions in `requirements.txt` are the patched ones as of the Milestone 10 audit. Re-run `pip-audit -r requirements.txt` before each release. |
 
 ## What is NOT protected (be honest about these)
@@ -28,6 +29,7 @@
 - **Certificates last 10 years** and there is no key rotation yet.
 - **IP address, port, display name and a stable discovery hint are visible** on the network while the receiver runs and advertises (never file names or contents, and never the device ID). Use `--no-advertise` to hide.
 - A device that is already paired **and** compromised can do whatever a paired device can do.
+- The installer and program are not code-signed (Windows SmartScreen warns; verify downloads with `SHA256SUMS.txt`).
 - This has not had an independent security audit. Milestone 10 was a self-audit with automated scanners and hostile tests (`docs/milestone-10.md`). It uses standard components (TLS 1.3 from OpenSSL via Python, the `cryptography` library, HMAC-SHA256) and no home-made cryptography.
 
 ## Never commit these

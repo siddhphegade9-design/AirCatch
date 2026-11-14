@@ -1,17 +1,19 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+
+# build output (the PyInstaller recipe itself is kept)
 build/
 dist/
 *.spec
-.pytest_cache/
+!packaging/aircatch.spec
 
+# per-device data: never commit identities or keys
 received/
-
 devices/
-
-received/
-
-devices/
-
 *.key
+
+# gesture recordings made with gesture_record.py
+aircatch-recording-*.json.gz

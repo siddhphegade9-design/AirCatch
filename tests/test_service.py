@@ -481,14 +481,21 @@ def test_the_service_notices_when_the_pc_changes_network(tmp_path, monkeypatch):
         while service._addresses != ("10.0.0.7",) and time.monotonic() < deadline:
             time.sleep(0.05)
         assert service._addresses == ("10.0.0.7",)
+        while (service.discovery is None or service.discovery is first) and time.monotonic() < deadline:
+            time.sleep(0.05)                                  # (the new search starts a moment later)
         assert service.discovery is not None and service.discovery is not first      # looking afresh
         addresses["now"] = []                                 # Wi-Fi switched off: must not crash
         deadline = time.monotonic() + 10
         while service._addresses != () and time.monotonic() < deadline:
             time.sleep(0.05)
         assert service._addresses == () and service.is_alive()
-        with sink._cond:
-            ready = [p for k, p in sink.events if k == "status" and p["ready"]]
-        assert len(ready) >= 3                                # the app was told each time
+
+        def ready_count():
+            with sink._cond:
+                return len([p for k, p in sink.events if k == "status" and p["ready"]])
+        deadline = time.monotonic() + 10                      # the announcement follows a moment later
+        while ready_count() < 3 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert ready_count() >= 3                             # the app was told each time
     finally:
         service.stop()

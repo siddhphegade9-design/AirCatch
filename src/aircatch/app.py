@@ -18,6 +18,7 @@ from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from aircatch import __version__
 from aircatch.logsetup import setup_logging
 from aircatch.ui.controller import (AppController, AppSettings, ImageProvider, ThumbProvider,
                                     default_config_dir)
@@ -49,10 +50,108 @@ def parse_settings(argv: list[str]) -> tuple[AppSettings, list[str]]:
     return settings, rest
 
 
+def _prepare_process() -> object | None:
+    """Things an installed Windows program needs before any window exists."""
+    for name in ("stdout", "stderr"):            # no console window: a stray print() must not crash
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115 (lives as long as the app)
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        # own taskbar button and icon (not "python"); the installer looks for the mutex to see if we are running
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AirCatch.AirCatch")
+        return ctypes.windll.kernel32.CreateMutexW(None, False, "AirCatchApplicationMutex")
+    except Exception:                            # cosmetic only: never stop the app for this
+        return None
+
+
+def _take_option(argv: list[str], name: str, has_value: bool) -> tuple[list[str], str | None]:
+    """Remove `name` (and its value) from argv; return what was there."""
+    if name not in argv:
+        return argv, None
+    i = argv.index(name)
+    if not has_value:
+        return argv[:i] + argv[i + 1:], ""
+    value = argv[i + 1] if i + 1 < len(argv) else ""
+    return argv[:i] + argv[i + 2:], value
+
+
+def _self_test_checks(controller: AppController, engine: QQmlApplicationEngine) -> dict:
+    """What a packaged copy must be able to do. Each entry: ok + a short detail."""
+    results: dict[str, dict] = {}
+
+    def check(name, fn):
+        try:
+            results[name] = {"ok": True, "detail": str(fn())}
+        except Exception as exc:                 # report, do not stop at the first one
+            results[name] = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+    def window():
+        if not engine.rootObjects():
+            raise RuntimeError("main.qml did not load")
+        return "main.qml loaded"
+
+    def network():
+        if not controller.networkReady:
+            raise RuntimeError(controller.status)
+        return controller.status
+
+    def tracker():
+        import numpy as np
+        from aircatch.gestures.tracker import HandTracker
+        hands = HandTracker()
+        try:
+            return f"hand tracker ran, {len(hands.process(np.zeros((480, 640, 3), np.uint8)))} hands in a black picture"
+        finally:
+            hands.close()
+
+    def camera_library():
+        import cv2
+        return f"OpenCV {cv2.__version__}"
+
+    def qr_code():
+        import qrcode
+        return f"QR code with {qrcode.make('aircatch').size[0]} px"
+
+    def secure_generator():
+        import ssl
+        return f"{ssl.OPENSSL_VERSION}, TLS 1.3 {'yes' if ssl.HAS_TLSv1_3 else 'NO'}"
+
+    check("version", lambda: __version__)
+    check("window", window)
+    check("network_service", network)
+    check("hand_tracker", tracker)
+    check("camera_library", camera_library)
+    check("qr_code", qr_code)
+    check("tls", secure_generator)
+
+    def pair_and_send():
+        from aircatch.selftest import pair_and_transfer
+        return pair_and_transfer()
+    check("pair_and_transfer", pair_and_send)
+    return results
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    mutex = _prepare_process()                   # noqa: F841 (kept alive until the app ends)
+    argv, wants_version = _take_option(argv, "--version", False)
+    if wants_version is not None:
+        print(f"AirCatch {__version__}")
+        return 0
+    # --self-test FILE: start everything in a throw-away folder, write what works to FILE, and exit.
+    # Used after packaging to prove the installed program can really start (it has no console to look at).
+    argv, self_test = _take_option(argv, "--self-test", True)
+    if self_test is not None:
+        import tempfile
+        scratch = Path(tempfile.mkdtemp(prefix="aircatch-selftest-"))
+        argv += ["--config-dir", str(scratch / "config"), "--download-dir", str(scratch / "inbox"),
+                 "--no-advertise"]
     settings, qt_args = parse_settings(argv[1:])
     setup_logging(settings.config_dir)
+    logging.getLogger("aircatch").info("AirCatch %s starting (packaged=%s)", __version__,
+                                       bool(getattr(sys, "frozen", False)))
     qt_log = logging.getLogger("aircatch.qt")
 
     def route_qt_messages(mode, context, message):
@@ -63,9 +162,11 @@ def main(argv: list[str] | None = None) -> int:
     app = QGuiApplication([argv[0], *qt_args])
     app.setApplicationName("AirCatch")
     app.setOrganizationName("AirCatch")
-    logo = UI_DIR / "assets" / "aircatch-logo.png"
-    if logo.exists():
-        app.setWindowIcon(QIcon(str(logo)))
+    app.setApplicationVersion(__version__)
+    for icon in ("aircatch-icon.png", "aircatch-logo.png"):       # the square icon; the wide logo as a fallback
+        if (UI_DIR / "assets" / icon).exists():
+            app.setWindowIcon(QIcon(str(UI_DIR / "assets" / icon)))
+            break
     QQuickStyle.setStyle("Basic")           # a plain base we fully restyle in QML
 
     camera, qr, thumbs = ImageProvider(), ImageProvider(), ThumbProvider()
@@ -76,10 +177,36 @@ def main(argv: list[str] | None = None) -> int:
     engine.addImageProvider("thumb", thumbs)
     engine.rootContext().setContextProperty("backend", controller)
     engine.load(QUrl.fromLocalFile(str(UI_DIR / "main.qml")))
-    if not engine.rootObjects():
+    if not engine.rootObjects() and self_test is None:
         controller.shutdown()
         return 1
     app.aboutToQuit.connect(controller.shutdown)
+    if self_test is not None:
+        import json
+        import time
+        from PySide6.QtCore import QTimer
+        started = time.monotonic()
+        outcome: dict = {}
+
+        def finish_when_ready():
+            if not controller.networkReady and time.monotonic() - started < 30:
+                return                                            # give the network service time to start
+            ticker.stop()
+            outcome.update(_self_test_checks(controller, engine))
+            app.quit()
+        ticker = QTimer()
+        ticker.timeout.connect(finish_when_ready)
+        ticker.start(200)
+        app.exec()
+        controller.shutdown()
+        del engine
+        passed = bool(outcome) and all(r["ok"] for r in outcome.values())
+        report = {"passed": passed, "version": __version__, "packaged": bool(getattr(sys, "frozen", False)),
+                  "platform": sys.platform, "python": sys.version.split()[0], "checks": outcome}
+        if self_test:
+            Path(self_test).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        return 0 if passed else 1
     code = app.exec()
     controller.shutdown()
     del engine                              # tear the UI down before the controller

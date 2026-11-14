@@ -8,10 +8,10 @@
 | receive | fist (held) -> open the hand | `ready` -> `catch` (accept). Close your fist, then release it. A fist that is already closed when the offer arrives must open first. |
 | any | tracking only | `idle` mode: poses and feedback, no gesture events |
 
-| send | peace sign (index + middle up) held 0.5 s | `browse_open`: the file explorer opens (never while a file is in hand) |
+| send | peace sign (index + middle up and apart, others curled) held 0.7 s | `browse_open`: the file explorer opens (never while a file is in hand) |
 | browse | quick hand swipe up / down / left / right (any hand shape except a pinch) | `swipe` with `detail` = direction. Up/down move the highlight, right opens a folder, left goes back |
-| browse | pinch (thumb tip + index tip touching, middle / ring / pinky straight up) held 0.25 s | `select`: opens a folder, or picks a file, closes the explorer and returns to send mode |
-| browse | peace sign held 0.5 s | `browse_close` |
+| browse | pinch (thumb tip + index tip touching, at least two of middle / ring / pinky straight, palm towards the camera) held still about 0.5 s | `select`: opens a folder, or picks a file, closes the explorer and returns to send mode |
+| browse | peace sign held 0.7 s | `browse_close` |
 
 Every gesture also has a button fallback in the app (Milestone 6). The explorer has a **Browse** button and its rows can be clicked.
 

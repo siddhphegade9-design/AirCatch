@@ -7,4 +7,6 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from aircatch.app import main  # noqa: E402
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()     # needed once the app is packaged as an .exe; harmless otherwise
     sys.exit(main())

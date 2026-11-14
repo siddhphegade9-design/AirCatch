@@ -270,7 +270,8 @@ def test_forty_transfers_in_a_row_and_at_once_all_arrive_intact(tmp_path):
         peer = TrustedPeer.from_identity(alice.identity)
         r = random.Random(3)
         sent = {}
-        async with secure_receiver(alice, max_concurrent=4, max_per_address=16, max_connections=16) as (rcv, port, _):
+        # (room for all 20 senders to be connected at once: this test is about the files, not the limits)
+        async with secure_receiver(alice, max_concurrent=4, max_per_address=64, max_connections=64) as (rcv, port, _):
             async def one(i):
                 src = tmp_path / f"file-{i}.bin"
                 data = os.urandom(r.choice([0, 1, 4096, 1024 * 1024, 1024 * 1024 + 1, 3_000_000]))

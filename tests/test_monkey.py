@@ -60,7 +60,7 @@ def actions(ctl, r, files, tmp_path):
             swipe_note=r.choice(["", "left: ok"]), ready=r.choice(sorted(READY))))
 
     acts = [
-        ctl.toggleReducedMotion, ctl.toggleEasyThrow, ctl.toggleCamera, ctl.setSendMode, ctl.setReceiveMode,
+        ctl.toggleReducedMotion, ctl.toggleEasyThrow, ctl.dismissWelcome, ctl.showWelcomeAgain, ctl.toggleCamera, ctl.setSendMode, ctl.setReceiveMode,
         ctl.openBrowser, ctl.closeBrowser, ctl.browserOpenFolder, ctl.browserBack, ctl.browserSelect,
         lambda: ctl.browserMove(r.choice([-3, -1, 1, 2, 500])), lambda: ctl.browserActivate(r.randrange(-2, 60)),
         lambda: ctl.chooseFile(str(r.choice(files))), lambda: ctl.chooseFile(r.choice(["", "nope", str(tmp_path)])),

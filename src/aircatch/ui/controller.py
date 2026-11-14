@@ -24,6 +24,7 @@ from PySide6.QtCore import (QAbstractListModel, QModelIndex, QObject, Property, 
 from PySide6.QtGui import QColor, QDesktopServices, QImage
 from PySide6.QtQuick import QQuickImageProvider
 
+from aircatch import __version__
 from aircatch.gestures.config import GestureConfig
 from aircatch.service import NetworkService, reason_text
 from aircatch.ui.filebrowser import FileBrowser
@@ -185,7 +186,7 @@ _DEFAULTS: dict = {
     "hasIncomingThumb": False, "receivePhase": "none", "receiveMessage": "",
     "receiveProgress": 0.0, "receivedName": "",
     "transferLabel": "No active transfer", "transferProgress": 0.0,
-    "history": [], "reducedMotion": False, "pairingUri": "", "qrVersion": 0,
+    "showWelcome": False, "history": [], "reducedMotion": False, "pairingUri": "", "qrVersion": 0,
     "easyThrow": True, "lastGesture": "", "sendStep": "",
     "connectionNote": "", "connectionOk": False, "testingConnection": False,
     "browsing": False, "browserTitle": "", "browserIndex": 0, "browserNote": "", "browserCount": 0,
@@ -275,6 +276,9 @@ class AppController(QObject):
                                 notify=transferProgressChanged)
     history = Property("QVariantList", lambda s: s._v["history"], notify=historyChanged)
     reducedMotion = Property(bool, lambda s: s._v["reducedMotion"], notify=reducedMotionChanged)
+    showWelcomeChanged = Signal()
+    showWelcome = Property(bool, lambda s: s._v["showWelcome"], notify=showWelcomeChanged)
+    appVersion = Property(str, lambda s: __version__, constant=True)
     pairingUri = Property(str, lambda s: s._v["pairingUri"], notify=pairingUriChanged)
     qrVersion = Property(int, lambda s: s._v["qrVersion"], notify=qrVersionChanged)
     easyThrow = Property(bool, lambda s: s._v["easyThrow"], notify=easyThrowChanged)
@@ -378,21 +382,34 @@ class AppController(QObject):
         return self._settings.config_dir / "ui_settings.json"
 
     def _load_ui_settings(self) -> None:
+        self._welcomed = False
         try:
             data = json.loads(self._ui_settings_path().read_text("utf-8"))
             self._v["reducedMotion"] = bool(data.get("reduced_motion", False))
             self._v["easyThrow"] = bool(data.get("easy_throw", True))
+            self._welcomed = bool(data.get("welcomed", False))
         except (OSError, ValueError, AttributeError):
             pass
+        self._v["showWelcome"] = not self._welcomed       # first start on this PC: explain camera and firewall
 
     def _save_ui_settings(self) -> None:
         try:
             self._settings.config_dir.mkdir(parents=True, exist_ok=True)
             self._ui_settings_path().write_text(
                 json.dumps({"reduced_motion": self._v["reducedMotion"],
-                            "easy_throw": self._v["easyThrow"]}), "utf-8")
+                            "easy_throw": self._v["easyThrow"], "welcomed": self._welcomed}), "utf-8")
         except OSError:
             pass
+
+    @Slot()
+    def dismissWelcome(self) -> None:
+        self._welcomed = True
+        self._set("showWelcome", False)
+        self._save_ui_settings()
+
+    @Slot()
+    def showWelcomeAgain(self) -> None:
+        self._set("showWelcome", True)
 
     @Slot()
     def toggleReducedMotion(self) -> None:

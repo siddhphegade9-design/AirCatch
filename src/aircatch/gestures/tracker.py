@@ -23,13 +23,19 @@ class HandTracker:
 
     def __init__(self, config: TrackerConfig | None = None) -> None:
         cfg = config or TrackerConfig()
+        import sys
+        packaged = bool(getattr(sys, "frozen", False))      # the installed program, not a developer's copy
         try:
             import mediapipe as mp
             import numpy as np
         except ImportError as exc:
-            raise TrackerError("MediaPipe is not installed. Run:  pip install -r requirements.txt") from exc
+            raise TrackerError("Hand tracking is missing from this copy of AirCatch. Install AirCatch again."
+                               if packaged else
+                               "MediaPipe is not installed. Run:  pip install -r requirements.txt") from exc
         if not hasattr(mp, "solutions"):
-            raise TrackerError("This MediaPipe version has no hand 'solutions'. "
+            raise TrackerError("Hand tracking in this copy of AirCatch is damaged. Install AirCatch again."
+                               if packaged else
+                               "This MediaPipe version has no hand 'solutions'. "
                                "Run:  pip install mediapipe==0.10.14")
         self._np = np
         try:
